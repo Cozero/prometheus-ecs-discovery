@@ -1,4 +1,6 @@
-FROM golang:1.15-alpine
+# This file was modified by Cozero GmbH in 2026.
+
+FROM golang:1.16-alpine
 WORKDIR /src
 RUN apk --no-cache add git
 COPY *.go go.mod go.sum ./

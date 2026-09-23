@@ -5,6 +5,16 @@ not have the capacity to discover ECS instances that can be scraped
 by Prometheus.  This program is a Prometheus File Service Discovery
 (`file_sd_config`) integration that bridges said gap.
 
+## About this fork
+
+This is a fork of [teralytics/prometheus-ecs-discovery](https://github.com/teralytics/prometheus-ecs-discovery),
+maintained by Cozero GmbH.
+
+The original work is Copyright 2017 Teralytics, licensed under the Apache
+License 2.0.  This file was modified by Cozero GmbH in 2026.  Modifications
+by Cozero GmbH are marked in the affected files; see the git history for
+detail.
+
 ## Help
 
 Run `prometheus-ecs-discovery --help` to get information.

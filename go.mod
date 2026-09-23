@@ -1,6 +1,7 @@
-module github.com/teralytics/prometheus-ecs-discovery
+// This file was modified by Cozero GmbH in 2026.
+module github.com/Cozero/prometheus-ecs-discovery
 
-go 1.15
+go 1.16
 
 require (
 	github.com/aws/aws-sdk-go-v2/config v1.1.4
