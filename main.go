@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -35,20 +38,44 @@ func (s *stringsFlag) Set(value string) error {
 	return nil
 }
 
-var clusterIds stringsFlag
-
-func init() {
-	flag.Var(&clusterIds, "config.cluster", "name or ARN of a cluster to scrape; repeat for multiple clusters (none = all clusters, max 100)")
+// appConfig is the tool's configuration, as parsed from the command line
+type appConfig struct {
+	clusterIds  []string
+	outFile     string
+	interval    time.Duration
+	times       int
+	roleArn     string
+	labelConfig ExplorerContainerLabelConfig
 }
 
-var outFile = flag.String("config.write-to", "ecs_file_sd.yml", "path of file to write ECS service discovery information to")
-var interval = flag.Duration("config.scrape-interval", 60*time.Second, "interval at which to scrape the AWS API for ECS service discovery information")
-var times = flag.Int("config.scrape-times", 0, "how many times to scrape before exiting (0 = infinite)")
-var roleArn = flag.String("config.role-arn", "", "ARN of the role to assume when scraping the AWS API (optional)")
-var prometheusFilterLabel = flag.String("config.filter-label", "prometheus.io/scrape", "Docker label that must be set to \"true\" for a container to be scraped")
-var prometheusPortLabel = flag.String("config.port-label", "prometheus.io/port", "Docker label to define the scrape port of the application (required)")
-var prometheusPathLabel = flag.String("config.path-label", "prometheus.io/path", "Docker label to define the scrape path of the application (required)")
-var prometheusSchemeLabel = flag.String("config.scheme-label", "prometheus.io/scheme", "Docker label to define the scheme (http or https) of the application (required)")
+// parseConfig parses command line arguments (without the program name); usage and parse errors go to output.
+func parseConfig(args []string, output io.Writer) (appConfig, error) {
+	fs := flag.NewFlagSet("prometheus-ecs-discovery", flag.ContinueOnError)
+	fs.SetOutput(output)
+
+	var cfg appConfig
+	var clusterIds stringsFlag
+	fs.Var(&clusterIds, "config.cluster", "name or ARN of a cluster to scrape; repeat for multiple clusters (none = all clusters, max 100)")
+	fs.StringVar(&cfg.outFile, "config.write-to", "ecs_file_sd.yml", "path of file to write ECS service discovery information to")
+	fs.DurationVar(&cfg.interval, "config.scrape-interval", 60*time.Second, "interval at which to scrape the AWS API for ECS service discovery information")
+	fs.IntVar(&cfg.times, "config.scrape-times", 0, "how many times to scrape before exiting (0 = infinite)")
+	fs.StringVar(&cfg.roleArn, "config.role-arn", "", "ARN of the role to assume when scraping the AWS API (optional)")
+	fs.StringVar(&cfg.labelConfig.FilterLabel, "config.filter-label", "prometheus.io/scrape", "Docker label that must be set to \"true\" for a container to be scraped")
+	fs.StringVar(&cfg.labelConfig.PortLabel, "config.port-label", "prometheus.io/port", "Docker label to define the scrape port of the application (required)")
+	fs.StringVar(&cfg.labelConfig.PathLabel, "config.path-label", "prometheus.io/path", "Docker label to define the scrape path of the application (required)")
+	fs.StringVar(&cfg.labelConfig.SchemeLabel, "config.scheme-label", "prometheus.io/scheme", "Docker label to define the scheme (http or https) of the application (required)")
+
+	if err := fs.Parse(args); err != nil {
+		return appConfig{}, err
+	}
+
+	if len(clusterIds) > maxClusterIds {
+		return appConfig{}, fmt.Errorf("at most %d clusters can be configured, got %d", maxClusterIds, len(clusterIds))
+	}
+	cfg.clusterIds = clusterIds
+
+	return cfg, nil
+}
 
 // logError is a convenience function that decodes all possible ECS
 // errors and displays them to standard error.
@@ -63,62 +90,70 @@ func logError(err error) {
 	}
 }
 
-func main() {
-	flag.Parse()
+// writeTargets writes the discovered targets as a Prometheus file service discovery config.
+func writeTargets(path string, targets []*DiscoveredTaskTargets) error {
+	m, err := yaml.Marshal(targets)
+	if err != nil {
+		return err
+	}
+	log.Printf("Writing %d discovered exporters to %s", len(targets), path)
+	return ioutil.WriteFile(path, m, 0644)
+}
 
-	if len(clusterIds) > maxClusterIds {
-		log.Fatalf("at most %d clusters can be configured, got %d", maxClusterIds, len(clusterIds))
+// execute runs discovery once straight away, then on every tick, until cfg.times runs are done
+// (0 = forever) or ctx is cancelled. A failed run is logged and doesn't stop the loop.
+func execute(ctx context.Context, cfg appConfig, client EcsAPIClient, ticks <-chan time.Time) {
+	explorer := &EcsTaskExplorer{
+		ecs:                  client,
+		containerLabelConfig: cfg.labelConfig,
+		clusterIds:           cfg.clusterIds,
 	}
 
-	cfg, err := config.LoadDefaultConfig(context.Background())
+	work := func() {
+		targets, err := explorer.Discover(ctx)
+		if err != nil {
+			logError(err)
+			return
+		}
+		if err := writeTargets(cfg.outFile, targets); err != nil {
+			logError(err)
+		}
+	}
+
+	work()
+	for n := 1; cfg.times == 0 || n < cfg.times; n++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+		}
+		work()
+	}
+}
+
+func main() {
+	cfg, err := parseConfig(os.Args[1:], os.Stderr)
+	if errors.Is(err, flag.ErrHelp) {
+		return
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	awsCfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		logError(err)
 		return
 	}
 
-	if *roleArn != "" {
+	if cfg.roleArn != "" {
 		// Assume role
-		stsSvc := sts.NewFromConfig(cfg)
-		cfg.Credentials = stscreds.NewAssumeRoleProvider(stsSvc, *roleArn)
+		stsSvc := sts.NewFromConfig(awsCfg)
+		awsCfg.Credentials = stscreds.NewAssumeRoleProvider(stsSvc, cfg.roleArn)
 	}
 
-	explorer := &EcsTaskExplorer{
-		ecs: ecs.NewFromConfig(cfg),
-		containerLabelConfig: ExplorerContainerLabelConfig{
-			FilterLabel: *prometheusFilterLabel,
-			PortLabel:   *prometheusPortLabel,
-			PathLabel:   *prometheusPathLabel,
-			SchemeLabel: *prometheusSchemeLabel,
-		},
-		clusterIds: clusterIds,
-	}
-
-	work := func() {
-		targets, err := explorer.Discover(context.Background())
-		if err != nil {
-			logError(err)
-			return
-		}
-		m, err := yaml.Marshal(targets)
-		if err != nil {
-			logError(err)
-			return
-		}
-		log.Printf("Writing %d discovered exporters to %s", len(targets), *outFile)
-		err = ioutil.WriteFile(*outFile, m, 0644)
-		if err != nil {
-			logError(err)
-			return
-		}
-	}
-
-	ticker := time.NewTicker(*interval)
+	ticker := time.NewTicker(cfg.interval)
 	defer ticker.Stop()
 
-	// run once straight away, then on every tick until scrape-times runs are done (0 = forever)
-	work()
-	for n := 1; *times == 0 || n < *times; n++ {
-		<-ticker.C
-		work()
-	}
+	execute(context.Background(), cfg, ecs.NewFromConfig(awsCfg), ticker.C)
 }
