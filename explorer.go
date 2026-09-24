@@ -192,12 +192,15 @@ func (e *EcsTaskExplorer) getDetailedTaskDataInClusters(ctx context.Context, clu
 			res, err := e.ecs.DescribeTaskDefinition(ctx, &ecs.DescribeTaskDefinitionInput{
 				TaskDefinition: aws.String(taskDefinitionArn),
 			})
+			// one bad task definition shouldn't hide every other target - log and skip the task
 			if err != nil {
-				return nil, fmt.Errorf("Failed describing task definition %s: %w", taskDefinitionArn, err)
+				log.Printf("Failed describing task definition %s for task %s, skipping: %s", taskDefinitionArn, aws.ToString(task.TaskArn), err)
+				continue
 			}
 			// while this should never happen, we're just doing defensive programming with this check
 			if res.TaskDefinition == nil {
-				return nil, fmt.Errorf("Failed describing task definition %s: no task definition returned", taskDefinitionArn)
+				log.Printf("Failed describing task definition %s for task %s, skipping: no task definition returned", taskDefinitionArn, aws.ToString(task.TaskArn))
+				continue
 			}
 
 			taskDefinition = *res.TaskDefinition
@@ -267,16 +270,20 @@ func (e *EcsTaskExplorer) getTasksRunningInCluster(ctx context.Context, clusterA
 			return nil, listErr
 		}
 
-		descOutput, descErr := e.ecs.DescribeTasks(ctx, &ecs.DescribeTasksInput{
-			Cluster: &clusterArn,
-			Tasks:   listOutput.TaskArns,
-		})
-		if descErr != nil {
-			return nil, descErr
+		// DescribeTasks rejects an empty task list, e.g. for a cluster with no running tasks
+		if len(listOutput.TaskArns) > 0 {
+			descOutput, descErr := e.ecs.DescribeTasks(ctx, &ecs.DescribeTasksInput{
+				Cluster: &clusterArn,
+				Tasks:   listOutput.TaskArns,
+			})
+			if descErr != nil {
+				return nil, descErr
+			}
+
+			tasks.Tasks = append(tasks.Tasks, descOutput.Tasks...)
+			tasks.Failures = append(tasks.Failures, descOutput.Failures...)
 		}
-		
-		tasks.Tasks = append(tasks.Tasks, descOutput.Tasks...)
-		tasks.Failures = append(tasks.Failures, descOutput.Failures...)
+
 		if listOutput.NextToken == nil {
 			break
 		}
