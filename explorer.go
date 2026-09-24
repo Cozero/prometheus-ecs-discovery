@@ -159,7 +159,7 @@ func (e *EcsTaskExplorer) getClusterARNs(ctx context.Context) ([]string, error) 
 		for _, c := range res.Clusters {
 			clusterArns = append(clusterArns, *c.ClusterArn)
 		}
-		log.Printf("Validated %d configured cluster(s) %v: %v", len(e.clusterIds), e.clusterIds, clusterArns)
+		log.Printf("Got %d clusters validated:\n%s", len(clusterArns), bulletList(clusterArns))
 
 	} else {
 		res, err := e.getAllClusters(ctx)
@@ -168,10 +168,19 @@ func (e *EcsTaskExplorer) getClusterARNs(ctx context.Context) ([]string, error) 
 		}
 
 		clusterArns = res.ClusterArns
-		log.Printf("No clusters configured, found %d cluster(s): %v", len(clusterArns), clusterArns)
+		log.Printf("No clusters configured, got %d clusters discovered:\n%s", len(clusterArns), bulletList(clusterArns))
 	}
 
 	return clusterArns, nil
+}
+
+// bulletList formats items as one "- item" line each, for multi-line log messages.
+func bulletList(items []string) string {
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		lines = append(lines, "- "+item)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // getAllClusters retrieves a list of all *ClusterArns from Amazon ECS,
