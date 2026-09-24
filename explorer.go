@@ -22,6 +22,11 @@ type DetailedTaskData struct {
 	definition ecstypes.TaskDefinition
 }
 
+type DiscoveredTaskTargets struct {
+	Targets []string `yaml:"targets"`
+	Labels  labels   `yaml:"labels"`
+}
+
 // EcsTaskExplorer discovers ECS tasks
 // Only supports tasks running with awsvpc network mode (for now)
 type EcsTaskExplorer struct {
@@ -32,10 +37,85 @@ type EcsTaskExplorer struct {
 	clusterIds []string // empty array means all clusters. It will accept up to 100 entries (AWS API limit)
 }
 
-func (e *EcsTaskExplorer) Discover(ctx context.Context) ([]*PrometheusTaskInfo, error) {
-	// cg
+func (e *EcsTaskExplorer) Discover(ctx context.Context) ([]*DiscoveredTaskTargets, error) {
+	clusterArns, err := e.GetClusterARNs(ctx)
+	if err != nil {
+		return nil, err
+	}
 
-	return nil, nil
+	tasks, err := e.getDetailedTaskDataInClusters(ctx, clusterArns)
+	if err != nil {
+		return nil, err
+	}
+
+	// one entry per scrapable container: labels such as container name, path and scheme are per container
+	allDiscoveredTaskTargets := []*DiscoveredTaskTargets{} // non-nil: marshals to [] not null
+	for _, td := range tasks {
+		for _, containerDef := range td.definition.ContainerDefinitions {
+			scrapeConfig, err := e.containerLabelConfig.ContainerScrapeConfigFromDefinition(containerDef)
+			if err != nil {
+				// we don't stop processing - log errors
+				log.Printf("Found issues processing label config for task %q of task definition %q: %s",
+					aws.ToString(td.task.TaskArn), aws.ToString(td.definition.TaskDefinitionArn), err)
+				continue
+			}
+			if scrapeConfig == nil {
+				// not a scrape target
+				continue
+			}
+
+			containerName := aws.ToString(containerDef.Name)
+			container := findTaskContainer(td.task, containerName)
+			if container == nil {
+				log.Printf("Container %q of task %q not found in the running task, skipping", containerName, aws.ToString(td.task.TaskArn))
+				continue
+			}
+			ip := containerPrivateIP(*container)
+			if ip == "" {
+				// e.g. task still PENDING, network interface not attached yet
+				log.Printf("Container %q of task %q has no private IP yet, skipping", containerName, aws.ToString(td.task.TaskArn))
+				continue
+			}
+
+			allDiscoveredTaskTargets = append(allDiscoveredTaskTargets, &DiscoveredTaskTargets{
+				Targets: []string{fmt.Sprintf("%s:%d", ip, scrapeConfig.Port)},
+				Labels: labels{
+					TaskArn:       aws.ToString(td.task.TaskArn),
+					TaskName:      aws.ToString(td.definition.Family),
+					TaskRevision:  fmt.Sprintf("%d", td.definition.Revision),
+					TaskGroup:     aws.ToString(td.task.Group),
+					ClusterArn:    aws.ToString(td.task.ClusterArn),
+					ContainerName: containerName,
+					ContainerArn:  aws.ToString(container.ContainerArn),
+					DockerImage:   aws.ToString(containerDef.Image),
+					MetricsPath:   scrapeConfig.Path,
+					Scheme:        scrapeConfig.Scheme,
+				},
+			})
+		}
+	}
+
+	return allDiscoveredTaskTargets, nil
+}
+
+// findTaskContainer returns the running container with the given name, or nil if the task has none.
+func findTaskContainer(task ecstypes.Task, name string) *ecstypes.Container {
+	for i := range task.Containers {
+		if aws.ToString(task.Containers[i].Name) == name {
+			return &task.Containers[i]
+		}
+	}
+	return nil
+}
+
+// containerPrivateIP returns the container's awsvpc private IPv4 address, or "" if it has none.
+func containerPrivateIP(container ecstypes.Container) string {
+	for _, ni := range container.NetworkInterfaces {
+		if ip := aws.ToString(ni.PrivateIpv4Address); ip != "" {
+			return ip
+		}
+	}
+	return ""
 }
 
 // GetClusterARNs gets cluster ARNs
@@ -95,19 +175,43 @@ func (e *EcsTaskExplorer) getAllClusters(ctx context.Context) (*ecs.ListClusters
 	return listAllClusterResults, nil
 }
 
-// func (e *EcsTaskExplorer) getDetailedTaskDataInClusters(ctx context.Context, clusterArns []string) ([]DetailedTaskData, error) {
-// 	tasks, err = e.GetTasksInClusters(ctx, clusterArns)
-// 	if err != null {
-// 		return nil, err
-// 	}
+func (e *EcsTaskExplorer) getDetailedTaskDataInClusters(ctx context.Context, clusterArns []string) ([]DetailedTaskData, error) {
+	tasks, err := e.GetTasksInClusters(ctx, clusterArns)
+	if err != nil {
+		return nil, err
+	}
 
-// 	taskDefinitionsById := map[string]ecstypes.TaskDefinition{}
+	taskDefinitionsByArn := map[string]ecstypes.TaskDefinition{}
 
-// 	for _, task := range tasks {
-// 		task.
-// 	}
+	detailedTaskData := make([]DetailedTaskData, 0, len(tasks))
+	for _, task := range tasks {
+		taskDefinitionArn := aws.ToString(task.TaskDefinitionArn)
 
-// }
+		taskDefinition, existing := taskDefinitionsByArn[taskDefinitionArn]
+		if !existing {
+			res, err := e.ecs.DescribeTaskDefinition(ctx, &ecs.DescribeTaskDefinitionInput{
+				TaskDefinition: aws.String(taskDefinitionArn),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("Failed describing task definition %s: %w", taskDefinitionArn, err)
+			}
+			// while this should never happen, we're just doing defensive programming with this check
+			if res.TaskDefinition == nil {
+				return nil, fmt.Errorf("Failed describing task definition %s: no task definition returned", taskDefinitionArn)
+			}
+
+			taskDefinition = *res.TaskDefinition
+			taskDefinitionsByArn[taskDefinitionArn] = taskDefinition
+		}
+
+		detailedTaskData = append(detailedTaskData, DetailedTaskData{
+			task:       task,
+			definition: taskDefinition,
+		})
+	}
+
+	return detailedTaskData, nil
+}
 
 // GetTasksInClusters gets all tasks from a set of cluster ARNs
 func (e *EcsTaskExplorer) GetTasksInClusters(ctx context.Context, clusterArns []string) ([]ecstypes.Task, error) {
