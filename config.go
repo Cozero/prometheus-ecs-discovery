@@ -7,19 +7,19 @@ import (
 	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 )
 
-// ExplorerContainerLabelConfig defines docker label names to scan to identify scrapable targets 
+// ExplorerContainerLabelConfig defines docker label names to scan to identify scrapable targets
 type ExplorerContainerLabelConfig struct {
- FilterLabel string
- PortLabel	 string
- PathLabel string
- SchemeLabel string
+	FilterLabel string
+	PortLabel   string
+	PathLabel   string
+	SchemeLabel string
 }
 
 // ContainerScrapeConfig defines scrape config for that container
 type ContainerLabelTaskConfig struct {
- Port int
- Path string
- Scheme string
+	Port   int
+	Path   string
+	Scheme string
 }
 
 func (cf *ExplorerContainerLabelConfig) ContainerScrapeConfigFromDefinition(containerDef ecstypes.ContainerDefinition) (*ContainerLabelTaskConfig, error) {
@@ -42,7 +42,7 @@ func (cf *ExplorerContainerLabelConfig) ContainerScrapeConfigFromDefinition(cont
 		return nil, err
 	}
 	if port < 1 || port > 65535 {
-			return nil, fmt.Errorf("port label value for %s is out of valid port range %q", cf.PortLabel, portLabelValue)
+		return nil, fmt.Errorf("port label value for %s is out of valid port range %q", cf.PortLabel, portLabelValue)
 	}
 
 	// path

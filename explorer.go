@@ -18,10 +18,26 @@ type clusterResult struct {
 }
 
 type DetailedTaskData struct {
-	task ecstypes.Task
+	task       ecstypes.Task
 	definition ecstypes.TaskDefinition
 }
 
+// labels are the Prometheus labels attached to a discovered target
+type labels struct {
+	TaskArn       string `yaml:"task_arn"`
+	TaskName      string `yaml:"task_name"`
+	JobName       string `yaml:"job,omitempty"`
+	TaskRevision  string `yaml:"task_revision"`
+	TaskGroup     string `yaml:"task_group"`
+	ClusterArn    string `yaml:"cluster_arn"`
+	ContainerName string `yaml:"container_name"`
+	ContainerArn  string `yaml:"container_arn"`
+	DockerImage   string `yaml:"docker_image"`
+	MetricsPath   string `yaml:"__metrics_path__,omitempty"`
+	Scheme        string `yaml:"__scheme__,omitempty"`
+}
+
+// DiscoveredTaskTargets is one Prometheus file service discovery entry
 type DiscoveredTaskTargets struct {
 	Targets []string `yaml:"targets"`
 	Labels  labels   `yaml:"labels"`
@@ -30,15 +46,13 @@ type DiscoveredTaskTargets struct {
 // EcsTaskExplorer discovers ECS tasks
 // Only supports tasks running with awsvpc network mode (for now)
 type EcsTaskExplorer struct {
-	ecs        EcsAPIClient
-	ec2        Ec2APIClient
-
+	ecs                  EcsAPIClient
 	containerLabelConfig ExplorerContainerLabelConfig
-	clusterIds []string // empty array means all clusters. It will accept up to 100 entries (AWS API limit)
+	clusterIds           []string // empty array means all clusters. It will accept up to 100 entries (AWS API limit)
 }
 
 func (e *EcsTaskExplorer) Discover(ctx context.Context) ([]*DiscoveredTaskTargets, error) {
-	clusterArns, err := e.GetClusterARNs(ctx)
+	clusterArns, err := e.getClusterARNs(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +75,8 @@ func (e *EcsTaskExplorer) Discover(ctx context.Context) ([]*DiscoveredTaskTarget
 			}
 			if scrapeConfig == nil {
 				// not a scrape target
+				log.Printf("Container %q of task %q is not a scrape target, docker labels: %v",
+					aws.ToString(containerDef.Name), aws.ToString(td.task.TaskArn), containerDef.DockerLabels)
 				continue
 			}
 
@@ -118,9 +134,9 @@ func containerPrivateIP(container ecstypes.Container) string {
 	return ""
 }
 
-// GetClusterARNs gets cluster ARNs
+// getClusterARNs gets cluster ARNs
 // this serves to validate the ARNs provided or fetch all clusters ARNs it has access to
-func (e *EcsTaskExplorer) GetClusterARNs(ctx context.Context) ([]string, error) {
+func (e *EcsTaskExplorer) getClusterARNs(ctx context.Context) ([]string, error) {
 	var clusterArns []string
 
 	if len(e.clusterIds) > 0 {
@@ -143,6 +159,7 @@ func (e *EcsTaskExplorer) GetClusterARNs(ctx context.Context) ([]string, error) 
 		for _, c := range res.Clusters {
 			clusterArns = append(clusterArns, *c.ClusterArn)
 		}
+		log.Printf("Validated %d configured cluster(s) %v: %v", len(e.clusterIds), e.clusterIds, clusterArns)
 
 	} else {
 		res, err := e.getAllClusters(ctx)
@@ -151,6 +168,7 @@ func (e *EcsTaskExplorer) GetClusterARNs(ctx context.Context) ([]string, error) 
 		}
 
 		clusterArns = res.ClusterArns
+		log.Printf("No clusters configured, found %d cluster(s): %v", len(clusterArns), clusterArns)
 	}
 
 	return clusterArns, nil
@@ -176,7 +194,7 @@ func (e *EcsTaskExplorer) getAllClusters(ctx context.Context) (*ecs.ListClusters
 }
 
 func (e *EcsTaskExplorer) getDetailedTaskDataInClusters(ctx context.Context, clusterArns []string) ([]DetailedTaskData, error) {
-	tasks, err := e.GetTasksInClusters(ctx, clusterArns)
+	tasks, err := e.getTasksInClusters(ctx, clusterArns)
 	if err != nil {
 		return nil, err
 	}
@@ -216,8 +234,8 @@ func (e *EcsTaskExplorer) getDetailedTaskDataInClusters(ctx context.Context, clu
 	return detailedTaskData, nil
 }
 
-// GetTasksInClusters gets all tasks from a set of cluster ARNs
-func (e *EcsTaskExplorer) GetTasksInClusters(ctx context.Context, clusterArns []string) ([]ecstypes.Task, error) {
+// getTasksInClusters gets all tasks from a set of cluster ARNs
+func (e *EcsTaskExplorer) getTasksInClusters(ctx context.Context, clusterArns []string) ([]ecstypes.Task, error) {
 	// create input and output channels
 	jobs := make(chan string, len(clusterArns))
 	results := make(chan clusterResult, len(clusterArns))
@@ -251,6 +269,11 @@ func (e *EcsTaskExplorer) GetTasksInClusters(ctx context.Context, clusterArns []
 		for _, f := range result.out.Failures {
 			log.Printf("Failed to describe task %s in cluster %s: %s", aws.ToString(f.Arn), result.clusterArn, aws.ToString(f.Reason))
 		}
+		log.Printf("Found %d task(s) in cluster %s", len(result.out.Tasks), result.clusterArn)
+		for _, task := range result.out.Tasks {
+			log.Printf("  task %s: status %s, launch type %s, task definition %s",
+				aws.ToString(task.TaskArn), aws.ToString(task.LastStatus), task.LaunchType, aws.ToString(task.TaskDefinitionArn))
+		}
 		tasks = append(tasks, result.out.Tasks...)
 	}
 
@@ -258,7 +281,7 @@ func (e *EcsTaskExplorer) GetTasksInClusters(ctx context.Context, clusterArns []
 }
 
 // get tasks from a single cluster
-func (e *EcsTaskExplorer) getTasksRunningInCluster(ctx context.Context, clusterArn string)(*ecs.DescribeTasksOutput, error) {
+func (e *EcsTaskExplorer) getTasksRunningInCluster(ctx context.Context, clusterArn string) (*ecs.DescribeTasksOutput, error) {
 	listTaskInput := &ecs.ListTasksInput{
 		Cluster: &clusterArn,
 	}

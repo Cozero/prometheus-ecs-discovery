@@ -108,3 +108,20 @@ file the minute it is written).  After reloading your Prometheus
 master configuration, this program will begin informing via
 the discovery file of new targets that Prometheus must scrape.
 
+## Build
+`go build`
+
+
+### Binary
+From the root
+`go build -o prometheus-ecs-discovery .`
+
+```
+  ./prometheus-ecs-discovery \
+    -config.cluster=my-cluster \
+    -config.write-to=ecs_file_sd.yml \
+    -config.scrape-times=1
+```
+
+## Tests
+`go test`

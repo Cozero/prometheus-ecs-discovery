@@ -17,12 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockEcsClient implements EcsAPIClient for tests. The embedded interface is
-// left nil, so calling any method not overridden here panics.
+// mockEcsClient implements EcsAPIClient for tests.
 type mockEcsClient struct {
 	mock.Mock
-	EcsAPIClient
 }
+
+// fails compilation if mockEcsClient stops implementing EcsAPIClient, e.g. when a method is added to it
+var _ EcsAPIClient = (*mockEcsClient)(nil)
 
 func (m *mockEcsClient) DescribeClusters(ctx context.Context, in *ecs.DescribeClustersInput, _ ...func(*ecs.Options)) (*ecs.DescribeClustersOutput, error) {
 	args := m.Called(ctx, in)
@@ -65,23 +66,100 @@ func newTaskDefinition(taskDefinitionArn string, family string, revision int32, 
 	}
 }
 
-// newRunningTask builds a task with a single container exposing port over TCP.
-func newRunningTask(clusterArn string, lastStatus string, taskArn string, taskDefinitionArn string, containerName string, port int32) types.Task {
+func newContainerDefinition(name string, image string, dockerLabels map[string]string) types.ContainerDefinition {
+	return types.ContainerDefinition{
+		Name:         aws.String(name),
+		Image:        aws.String(image),
+		DockerLabels: dockerLabels,
+	}
+}
+
+// scrapeLabels returns docker labels that make a container a scrape target under testLabelConfig.
+func scrapeLabels(port string, path string, scheme string) map[string]string {
+	return map[string]string{
+		testLabelConfig.FilterLabel: "true",
+		testLabelConfig.PortLabel:   port,
+		testLabelConfig.PathLabel:   path,
+		testLabelConfig.SchemeLabel: scheme,
+	}
+}
+
+// newAwsvpcTask builds a RUNNING task; containers are optional.
+func newAwsvpcTask(clusterArn string, taskArn string, taskDefinitionArn string, group string, containers ...types.Container) types.Task {
 	return types.Task{
 		TaskArn:           aws.String(taskArn),
 		TaskDefinitionArn: aws.String(taskDefinitionArn),
 		ClusterArn:        aws.String(clusterArn),
-		LastStatus:        aws.String(lastStatus),
-		Containers: []types.Container{
-			{
-				Name:       aws.String(containerName),
-				LastStatus: aws.String("RUNNING"),
-				NetworkBindings: []types.NetworkBinding{
-					{ContainerPort: aws.Int32(port), HostPort: aws.Int32(port), Protocol: types.TransportProtocolTcp},
-				},
-			},
-		},
+		Group:             aws.String(group),
+		LastStatus:        aws.String("RUNNING"),
+		Containers:        containers,
 	}
+}
+
+// newAwsvpcContainer builds a running container; an empty ip means no network interface attached yet.
+func newAwsvpcContainer(name string, containerArn string, ip string) types.Container {
+	container := types.Container{
+		Name:         aws.String(name),
+		ContainerArn: aws.String(containerArn),
+		LastStatus:   aws.String("RUNNING"),
+	}
+	if ip != "" {
+		container.NetworkInterfaces = []types.NetworkInterface{{PrivateIpv4Address: aws.String(ip)}}
+	}
+	return container
+}
+
+// expectClusters mocks ListClusters (no cluster IDs configured) returning a single page.
+func expectClusters(client *mockEcsClient, clusterArns ...string) {
+	client.On("ListClusters", mock.Anything, &ecs.ListClustersInput{}).Return(&ecs.ListClustersOutput{
+		ClusterArns: clusterArns,
+	}, nil).Once()
+}
+
+// expectTasksInCluster mocks a single page of ListTasks + DescribeTasks for the cluster.
+func expectTasksInCluster(client *mockEcsClient, clusterArn string, tasks ...types.Task) {
+	taskArns := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		taskArns = append(taskArns, aws.ToString(task.TaskArn))
+	}
+	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
+		Cluster: aws.String(clusterArn),
+	}).Return(&ecs.ListTasksOutput{
+		TaskArns: taskArns,
+	}, nil).Once()
+	client.On("DescribeTasks", mock.Anything, &ecs.DescribeTasksInput{
+		Cluster: aws.String(clusterArn),
+		Tasks:   taskArns,
+	}).Return(&ecs.DescribeTasksOutput{
+		Tasks: tasks,
+	}, nil).Once()
+}
+
+func expectTaskDefinition(client *mockEcsClient, taskDefinition types.TaskDefinition) {
+	client.On("DescribeTaskDefinition", mock.Anything, &ecs.DescribeTaskDefinitionInput{
+		TaskDefinition: taskDefinition.TaskDefinitionArn,
+	}).Return(&ecs.DescribeTaskDefinitionOutput{
+		TaskDefinition: &taskDefinition,
+	}, nil).Once()
+}
+
+// targetSummaries flattens discovered targets into readable one-liners, for order-independent comparison.
+func targetSummaries(discovered []*DiscoveredTaskTargets) []string {
+	summaries := make([]string, 0, len(discovered))
+	for _, d := range discovered {
+		summaries = append(summaries, fmt.Sprintf("%s %s %s %s %s",
+			d.Labels.TaskArn, d.Labels.ContainerName, strings.Join(d.Targets, ","), d.Labels.MetricsPath, d.Labels.Scheme))
+	}
+	return summaries
+}
+
+// captureLogs redirects the global logger for the rest of the test, so callers must not run in parallel.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	var logs bytes.Buffer
+	prevOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(prevOutput) })
+	return &logs
 }
 
 func TestGetClusterARNs_WithClusterIds(t *testing.T) {
@@ -100,7 +178,7 @@ func TestGetClusterARNs_WithClusterIds(t *testing.T) {
 		clusterIds: []string{"foo", "bar"},
 	}
 
-	got, err := explorer.GetClusterARNs(context.Background())
+	got, err := explorer.getClusterARNs(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{
@@ -112,7 +190,7 @@ func TestGetClusterARNs_WithClusterIds(t *testing.T) {
 
 func TestGetClusterARNs_WithClusterIds_DescribeClustersError(t *testing.T) {
 	apiErr := errors.New("describe clusters failed")
-	
+
 	client := &mockEcsClient{}
 	client.On("DescribeClusters", mock.Anything, &ecs.DescribeClustersInput{
 		Clusters: []string{"foo", "bar"},
@@ -123,7 +201,7 @@ func TestGetClusterARNs_WithClusterIds_DescribeClustersError(t *testing.T) {
 		clusterIds: []string{"foo", "bar"},
 	}
 
-	got, err := explorer.GetClusterARNs(context.Background())
+	got, err := explorer.getClusterARNs(context.Background())
 
 	assert.ErrorIs(t, err, apiErr)
 	assert.Nil(t, got)
@@ -154,7 +232,7 @@ func TestGetClusterARNs_WithClusterIds_DescribeClusters_Failures(t *testing.T) {
 		clusterIds: []string{"foo", "does_not_exist"},
 	}
 
-	got, err := explorer.GetClusterARNs(context.Background())
+	got, err := explorer.getClusterARNs(context.Background())
 
 	assert.EqualError(t, err, fmt.Sprintf("failed to describe 1 cluster(s):\n- %s: %s", missingArn, missingReason))
 	assert.Nil(t, got)
@@ -163,7 +241,7 @@ func TestGetClusterARNs_WithClusterIds_DescribeClusters_Failures(t *testing.T) {
 
 func TestGetClusterARNs_WithoutClusterIds(t *testing.T) {
 	client := &mockEcsClient{}
-	
+
 	client.On("ListClusters", mock.Anything, mock.MatchedBy(func(in *ecs.ListClustersInput) bool {
 		return in.NextToken == nil
 	})).Return(&ecs.ListClustersOutput{
@@ -179,7 +257,7 @@ func TestGetClusterARNs_WithoutClusterIds(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client}
 
-	got, err := explorer.GetClusterARNs(context.Background())
+	got, err := explorer.getClusterARNs(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{
@@ -281,9 +359,11 @@ func TestGetDetailedTaskDataInClusters_SingleCluster_MultiplePages(t *testing.T)
 
 	// it returns tasks regardless of state
 	// refer to https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-lifecycle-explanation.html
-	task1 := newRunningTask(clusterArn, "RUNNING", task1Arn, taskDefArn, "api", 8080)
-	task2 := newRunningTask(clusterArn, "PENDING", task2Arn, taskDefArn, "worker", 9100)
-	task3 := newRunningTask(clusterArn, "STOPPED", task3Arn, taskDefArn, "api", 8080)
+	task1 := newAwsvpcTask(clusterArn, task1Arn, taskDefArn, "service:api")
+	task2 := newAwsvpcTask(clusterArn, task2Arn, taskDefArn, "service:api")
+	task2.LastStatus = aws.String("PENDING")
+	task3 := newAwsvpcTask(clusterArn, task3Arn, taskDefArn, "service:api")
+	task3.LastStatus = aws.String("STOPPED")
 
 	client := &mockEcsClient{}
 
@@ -299,7 +379,7 @@ func TestGetDetailedTaskDataInClusters_SingleCluster_MultiplePages(t *testing.T)
 	}).Return(&ecs.ListTasksOutput{
 		TaskArns: []string{task3Arn},
 	}, nil).Once()
-	
+
 	client.On("DescribeTasks", mock.Anything, &ecs.DescribeTasksInput{
 		Cluster: &clusterArn,
 		Tasks:   []string{task1Arn, task2Arn},
@@ -376,8 +456,8 @@ func TestGetDetailedTaskDataInClusters_SingleCluster(t *testing.T) {
 	apiTaskDef := newTaskDefinition(apiTaskDefArn, "api", 1)
 	workerTaskDef := newTaskDefinition(workerTaskDefArn, "worker", 3)
 
-	task1 := newRunningTask(clusterArn, "RUNNING", task1Arn, apiTaskDefArn, "api", 8080)
-	task2 := newRunningTask(clusterArn, "RUNNING", task2Arn, workerTaskDefArn, "worker", 9100)
+	task1 := newAwsvpcTask(clusterArn, task1Arn, apiTaskDefArn, "service:api")
+	task2 := newAwsvpcTask(clusterArn, task2Arn, workerTaskDefArn, "service:worker")
 
 	client := &mockEcsClient{}
 	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
@@ -434,7 +514,7 @@ func TestGetDetailedTaskDataInClusters_TenClusters(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		clusterArn := fmt.Sprintf("arn:aws:ecs:eu-central-1:123456789012:cluster/cluster-%d", i)
 		taskArn := fmt.Sprintf("arn:aws:ecs:eu-central-1:123456789012:task/cluster-%d/1", i)
-		task := newRunningTask(clusterArn, "RUNNING", taskArn, taskDefArn, "api", 8080)
+		task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "service:api")
 
 		client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
 			Cluster: &clusterArn,
@@ -463,10 +543,7 @@ func TestGetDetailedTaskDataInClusters_TenClusters(t *testing.T) {
 
 // Swaps the global logger output, so it must not run in parallel with other tests.
 func TestGetDetailedTaskDataInClusters_DescribeTasksFailuresAreLogged(t *testing.T) {
-	var logs bytes.Buffer
-	prevOutput := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(prevOutput)
+	logs := captureLogs(t)
 
 	clusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/foo"
 	task1Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/1"
@@ -475,7 +552,7 @@ func TestGetDetailedTaskDataInClusters_DescribeTasksFailuresAreLogged(t *testing
 	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
 
 	taskDef := newTaskDefinition(taskDefArn, "api", 1)
-	task1 := newRunningTask(clusterArn, "RUNNING", task1Arn, taskDefArn, "api", 8080)
+	task1 := newAwsvpcTask(clusterArn, task1Arn, taskDefArn, "service:api")
 
 	client := &mockEcsClient{}
 	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
@@ -510,106 +587,6 @@ func TestGetDetailedTaskDataInClusters_DescribeTasksFailuresAreLogged(t *testing
 	assert.Contains(t, logs.String(), fmt.Sprintf("Failed to describe task %s in cluster %s: MISSING", task2Arn, clusterArn))
 	assert.Contains(t, logs.String(), fmt.Sprintf("Failed to describe task %s in cluster %s: MISSING", task3Arn, clusterArn))
 	client.AssertExpectations(t)
-}
-
-// --- Discover ---
-//
-// Every Discover test mocks the same AWS call sequence (ListClusters, ListTasks, DescribeTasks,
-// DescribeTaskDefinition); only the task/definition data differs, so the setup is shared.
-
-// captureLogs redirects the global logger for the rest of the test, so callers must not run in parallel.
-func captureLogs(t *testing.T) *bytes.Buffer {
-	var logs bytes.Buffer
-	prevOutput := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(prevOutput) })
-	return &logs
-}
-
-// scrapeLabels returns docker labels that make a container a scrape target under testLabelConfig.
-func scrapeLabels(port string, path string, scheme string) map[string]string {
-	return map[string]string{
-		testLabelConfig.FilterLabel: "true",
-		testLabelConfig.PortLabel:   port,
-		testLabelConfig.PathLabel:   path,
-		testLabelConfig.SchemeLabel: scheme,
-	}
-}
-
-func newContainerDefinition(name string, image string, dockerLabels map[string]string) types.ContainerDefinition {
-	return types.ContainerDefinition{
-		Name:         aws.String(name),
-		Image:        aws.String(image),
-		DockerLabels: dockerLabels,
-	}
-}
-
-// newAwsvpcContainer builds a running container; an empty ip means no network interface attached yet.
-func newAwsvpcContainer(name string, containerArn string, ip string) types.Container {
-	container := types.Container{
-		Name:         aws.String(name),
-		ContainerArn: aws.String(containerArn),
-		LastStatus:   aws.String("RUNNING"),
-	}
-	if ip != "" {
-		container.NetworkInterfaces = []types.NetworkInterface{{PrivateIpv4Address: aws.String(ip)}}
-	}
-	return container
-}
-
-func newAwsvpcTask(clusterArn string, taskArn string, taskDefinitionArn string, group string, containers ...types.Container) types.Task {
-	return types.Task{
-		TaskArn:           aws.String(taskArn),
-		TaskDefinitionArn: aws.String(taskDefinitionArn),
-		ClusterArn:        aws.String(clusterArn),
-		Group:             aws.String(group),
-		LastStatus:        aws.String("RUNNING"),
-		Containers:        containers,
-	}
-}
-
-// expectClusters mocks ListClusters (no cluster IDs configured) returning a single page.
-func expectClusters(client *mockEcsClient, clusterArns ...string) {
-	client.On("ListClusters", mock.Anything, &ecs.ListClustersInput{}).Return(&ecs.ListClustersOutput{
-		ClusterArns: clusterArns,
-	}, nil).Once()
-}
-
-// expectTasksInCluster mocks a single page of ListTasks + DescribeTasks for the cluster.
-func expectTasksInCluster(client *mockEcsClient, clusterArn string, tasks ...types.Task) {
-	taskArns := make([]string, 0, len(tasks))
-	for _, task := range tasks {
-		taskArns = append(taskArns, aws.ToString(task.TaskArn))
-	}
-	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
-		Cluster: aws.String(clusterArn),
-	}).Return(&ecs.ListTasksOutput{
-		TaskArns: taskArns,
-	}, nil).Once()
-	client.On("DescribeTasks", mock.Anything, &ecs.DescribeTasksInput{
-		Cluster: aws.String(clusterArn),
-		Tasks:   taskArns,
-	}).Return(&ecs.DescribeTasksOutput{
-		Tasks: tasks,
-	}, nil).Once()
-}
-
-func expectTaskDefinition(client *mockEcsClient, taskDefinition types.TaskDefinition) {
-	client.On("DescribeTaskDefinition", mock.Anything, &ecs.DescribeTaskDefinitionInput{
-		TaskDefinition: taskDefinition.TaskDefinitionArn,
-	}).Return(&ecs.DescribeTaskDefinitionOutput{
-		TaskDefinition: &taskDefinition,
-	}, nil).Once()
-}
-
-// targetSummaries flattens discovered targets into readable one-liners, for order-independent comparison.
-func targetSummaries(discovered []*DiscoveredTaskTargets) []string {
-	summaries := make([]string, 0, len(discovered))
-	for _, d := range discovered {
-		summaries = append(summaries, fmt.Sprintf("%s %s %s %s %s",
-			d.Labels.TaskArn, d.Labels.ContainerName, strings.Join(d.Targets, ","), d.Labels.MetricsPath, d.Labels.Scheme))
-	}
-	return summaries
 }
 
 func TestDiscover_SingleScrapableContainer(t *testing.T) {
@@ -1041,4 +1018,3 @@ func TestDiscover_ListTasksError(t *testing.T) {
 	assert.Nil(t, got)
 	client.AssertExpectations(t)
 }
-
