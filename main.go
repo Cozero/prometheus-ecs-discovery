@@ -147,7 +147,7 @@ func main() {
 
 	explorer := &EcsTaskExplorer{
 		ecs:                  ecs.NewFromConfig(awsCfg),
-		containerLabelConfig: cfg.labelConfig,
+		containerLabelConfig: &cfg.labelConfig,
 		clusterIds:           cfg.clusterIds,
 	}
 

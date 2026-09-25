@@ -52,7 +52,7 @@ type Explorer interface {
 // Only supports tasks running with awsvpc network mode (for now)
 type EcsTaskExplorer struct {
 	ecs                  EcsAPIClient
-	containerLabelConfig ExplorerContainerLabelConfig
+	containerLabelConfig ContainerLabelConfig
 	clusterIds           []string // empty array means all clusters. It will accept up to 100 entries (AWS API limit)
 }
 

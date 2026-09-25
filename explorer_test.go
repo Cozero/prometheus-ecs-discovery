@@ -75,6 +75,19 @@ func (m *mockEcsClient) DescribeTaskDefinition(
 	return out, args.Error(1)
 }
 
+// mockContainerLabelConfig implements ContainerLabelConfig for tests.
+type mockContainerLabelConfig struct {
+	mock.Mock
+}
+
+func (m *mockContainerLabelConfig) ContainerScrapeConfigFromDefinition(
+	containerDef types.ContainerDefinition,
+) (*ContainerLabelTaskConfig, error) {
+	args := m.Called(containerDef)
+	out, _ := args.Get(0).(*ContainerLabelTaskConfig)
+	return out, args.Error(1)
+}
+
 // scrapeDockerLabels returns docker labels that make a container a scrape target under testLabelConfig.
 func scrapeDockerLabels(port string, path string, scheme string) map[string]string {
 	return map[string]string{
@@ -140,30 +153,73 @@ func newTaskDefinition(
 * ===================
 */
 
-// setExpectationsListClusters mocks ListClusters API call returning results in a single page (i.e. no next page)
-func setExpectationsListClusters(client *mockEcsClient, clusterArns ...string) {
-	client.On("ListClusters", mock.Anything, &ecs.ListClustersInput{}).Return(&ecs.ListClustersOutput{
-		ClusterArns: clusterArns,
+// setExpectationsDescribeClusters mocks DescribeClusters finding every cluster asked for, with no failures
+func setExpectationsDescribeClusters(client *mockEcsClient, clusterIds []string, clusterArns ...string) {
+	clusters := make([]types.Cluster, 0, len(clusterArns))
+	for _, clusterArn := range clusterArns {
+		clusters = append(clusters, types.Cluster{ClusterArn: aws.String(clusterArn)})
+	}
+	client.On("DescribeClusters", mock.Anything, &ecs.DescribeClustersInput{
+		Clusters: clusterIds,
+	}).Return(&ecs.DescribeClustersOutput{
+		Clusters: clusters,
 	}, nil).Once()
 }
 
-// setExpectationsListAndDescribeTasks mocks a single page of ListTasks + DescribeTasks for the cluster.
-func setExpectationsListAndDescribeTasks(client *mockEcsClient, clusterArn string, tasks ...types.Task) {
-	taskArns := make([]string, 0, len(tasks))
-	for _, task := range tasks {
-		taskArns = append(taskArns, aws.ToString(task.TaskArn))
+// setExpectationsListClusters mocks ListClusters API call returning results in a single page (i.e. no next page)
+func setExpectationsListClusters(client *mockEcsClient, clusterArns ...string) {
+	setExpectationsListClustersInPages(client, clusterArns)
+}
+
+// setExpectationsListClustersInPages mocks ListClusters returning one page per argument, chained by next tokens
+func setExpectationsListClustersInPages(client *mockEcsClient, pages ...[]string) {
+	for i, clusterArns := range pages {
+		input := &ecs.ListClustersInput{}
+		if i > 0 {
+			input.NextToken = aws.String(fmt.Sprintf("page-%d", i+1))
+		}
+		output := &ecs.ListClustersOutput{ClusterArns: clusterArns}
+		if i < len(pages)-1 {
+			output.NextToken = aws.String(fmt.Sprintf("page-%d", i+2))
+		}
+		client.On("ListClusters", mock.Anything, input).Return(output, nil).Once()
 	}
-	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
-		Cluster: aws.String(clusterArn),
-	}).Return(&ecs.ListTasksOutput{
-		TaskArns: taskArns,
-	}, nil).Once()
-	client.On("DescribeTasks", mock.Anything, &ecs.DescribeTasksInput{
-		Cluster: aws.String(clusterArn),
-		Tasks:   taskArns,
-	}).Return(&ecs.DescribeTasksOutput{
-		Tasks: tasks,
-	}, nil).Once()
+}
+
+// setExpectationsListAndDescribeTasks mocks a single page of ListTasks + DescribeTasks for the cluster.
+// With no tasks only ListTasks is mocked, as DescribeTasks isn't called for an empty page.
+func setExpectationsListAndDescribeTasks(client *mockEcsClient, clusterArn string, tasks ...types.Task) {
+	setExpectationsListAndDescribeTasksInPages(client, clusterArn, tasks)
+}
+
+// setExpectationsListAndDescribeTasksInPages mocks ListTasks returning one page per argument, chained by next tokens,
+// plus DescribeTasks for each non-empty page.
+func setExpectationsListAndDescribeTasksInPages(client *mockEcsClient, clusterArn string, pages ...[]types.Task) {
+	for i, tasks := range pages {
+		taskArns := make([]string, 0, len(tasks))
+		for _, task := range tasks {
+			taskArns = append(taskArns, aws.ToString(task.TaskArn))
+		}
+
+		input := &ecs.ListTasksInput{Cluster: aws.String(clusterArn)}
+		if i > 0 {
+			input.NextToken = aws.String(fmt.Sprintf("page-%d", i+1))
+		}
+		output := &ecs.ListTasksOutput{TaskArns: taskArns}
+		if i < len(pages)-1 {
+			output.NextToken = aws.String(fmt.Sprintf("page-%d", i+2))
+		}
+		client.On("ListTasks", mock.Anything, input).Return(output, nil).Once()
+
+		if len(tasks) > 0 {
+			client.On("DescribeTasks", mock.Anything, &ecs.DescribeTasksInput{
+				Cluster: aws.String(clusterArn),
+				Tasks:   taskArns,
+			}).Return(&ecs.DescribeTasksOutput{
+				Tasks: tasks,
+			}, nil).Once()
+		}
+	}
 }
 
 func setExpectationsDescribeTaskDefinition(client *mockEcsClient, taskDefinition types.TaskDefinition) {
@@ -193,33 +249,191 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 	return &logs
 }
 
-func TestGetClusterARNs_WithClusterIds(t *testing.T) {
+/*
+* ===================
+* TESTS
+* ===================
+*/
+
+func TestDiscover_NoClusterIds_NoClustersFound(t *testing.T) {
 	client := &mockEcsClient{}
-	client.On("DescribeClusters", mock.Anything, &ecs.DescribeClustersInput{
-		Clusters: []string{"foo", "bar"},
-	}).Return(&ecs.DescribeClustersOutput{
-		Clusters: []types.Cluster{
-			{ClusterArn: aws.String("arn:aws:ecs:eu-central-1:123456789012:cluster/foo")},
-			{ClusterArn: aws.String("arn:aws:ecs:eu-central-1:123456789012:cluster/bar")},
-		},
-	}, nil).Once()
+	setExpectationsListClusters(client)
 
-	explorer := &EcsTaskExplorer{
-		ecs:        client,
-		clusterIds: []string{"foo", "bar"},
-	}
+	labelConfig := &mockContainerLabelConfig{}
 
-	got, err := explorer.getClusterARNs(context.Background())
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
+
+	got, err := explorer.Discover(context.Background())
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{
-		"arn:aws:ecs:eu-central-1:123456789012:cluster/foo",
-		"arn:aws:ecs:eu-central-1:123456789012:cluster/bar",
-	}, got)
+	// non-nil so the written file is `[]` rather than `null`
+	assert.NotNil(t, got)
+	assert.Empty(t, got)
 	client.AssertExpectations(t)
+	labelConfig.AssertExpectations(t)
 }
 
-func TestGetClusterARNs_WithClusterIds_DescribeClustersError(t *testing.T) {
+func TestDiscover_NoClusterIds_ClustersWithoutTasks(t *testing.T) {
+	fooClusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/foo"
+	barClusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/bar"
+
+	client := &mockEcsClient{}
+	// one cluster per page
+	setExpectationsListClustersInPages(client, []string{fooClusterArn}, []string{barClusterArn})
+	// no tasks, so no DescribeTasks either
+	setExpectationsListAndDescribeTasks(client, fooClusterArn)
+	setExpectationsListAndDescribeTasks(client, barClusterArn)
+
+	// no expectations: there are no containers to check
+	labelConfig := &mockContainerLabelConfig{}
+
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
+
+	got, err := explorer.Discover(context.Background())
+
+	require.NoError(t, err)
+	assert.NotNil(t, got)
+	assert.Empty(t, got)
+	client.AssertExpectations(t)
+	labelConfig.AssertExpectations(t)
+}
+
+func TestDiscover_WithClusterIds_AllTasksScrapable(t *testing.T) {
+	fooClusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/foo"
+	barClusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/bar"
+	fooTask1Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/1"
+	fooTask2Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/2"
+	barTask1Arn := "arn:aws:ecs:eu-central-1:123456789012:task/bar/1"
+	barTask2Arn := "arn:aws:ecs:eu-central-1:123456789012:task/bar/2"
+	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
+
+	containerDef := newContainerDefinition("api", "example/api:1.0", nil)
+	taskDef := newTaskDefinition(taskDefArn, "api", 1, containerDef)
+	fooTask1 := newAwsvpcTask(fooClusterArn, fooTask1Arn, taskDefArn, "service:api",
+		newAwsvpcContainer("api", fooTask1Arn+"/api", "10.0.0.1"))
+	fooTask2 := newAwsvpcTask(fooClusterArn, fooTask2Arn, taskDefArn, "service:api",
+		newAwsvpcContainer("api", fooTask2Arn+"/api", "10.0.0.2"))
+	barTask1 := newAwsvpcTask(barClusterArn, barTask1Arn, taskDefArn, "service:api",
+		newAwsvpcContainer("api", barTask1Arn+"/api", "10.0.1.1"))
+	barTask2 := newAwsvpcTask(barClusterArn, barTask2Arn, taskDefArn, "service:api",
+		newAwsvpcContainer("api", barTask2Arn+"/api", "10.0.1.2"))
+
+	client := &mockEcsClient{}
+	setExpectationsDescribeClusters(client, []string{"foo", "bar"}, fooClusterArn, barClusterArn)
+	// one task per page
+	setExpectationsListAndDescribeTasksInPages(client, fooClusterArn, []types.Task{fooTask1}, []types.Task{fooTask2})
+	setExpectationsListAndDescribeTasksInPages(client, barClusterArn, []types.Task{barTask1}, []types.Task{barTask2})
+	// the same service runs in both clusters, so the shared definition is described once
+	setExpectationsDescribeTaskDefinition(client, taskDef)
+
+	labelConfig := &mockContainerLabelConfig{}
+	// every task's container is checked
+	labelConfig.On("ContainerScrapeConfigFromDefinition", containerDef).
+		Return(&ContainerLabelTaskConfig{Port: 8080, Path: "/metrics", Scheme: "http"}, nil).Times(4)
+
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig, clusterIds: []string{"foo", "bar"}}
+
+	got, err := explorer.Discover(context.Background())
+
+	require.NoError(t, err)
+	// clusters are processed concurrently, so order isn't guaranteed
+	assert.ElementsMatch(t, []string{
+		fooTask1Arn + " api 10.0.0.1:8080 /metrics http",
+		fooTask2Arn + " api 10.0.0.2:8080 /metrics http",
+		barTask1Arn + " api 10.0.1.1:8080 /metrics http",
+		barTask2Arn + " api 10.0.1.2:8080 /metrics http",
+	}, targetSummaries(got))
+	client.AssertExpectations(t)
+	labelConfig.AssertExpectations(t)
+}
+
+func TestDiscover_NoClusterIds_AllTasksScrapable(t *testing.T) {
+	fooClusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/foo"
+	barClusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/bar"
+	fooTask1Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/1"
+	fooTask2Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/2"
+	barTask1Arn := "arn:aws:ecs:eu-central-1:123456789012:task/bar/1"
+	barTask2Arn := "arn:aws:ecs:eu-central-1:123456789012:task/bar/2"
+	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
+
+	containerDef := newContainerDefinition("api", "example/api:1.0", nil)
+	taskDef := newTaskDefinition(taskDefArn, "api", 1, containerDef)
+	fooTask1 := newAwsvpcTask(fooClusterArn, fooTask1Arn, taskDefArn, "service:api",
+		newAwsvpcContainer("api", fooTask1Arn+"/api", "10.0.0.1"))
+	fooTask2 := newAwsvpcTask(fooClusterArn, fooTask2Arn, taskDefArn, "service:api",
+		newAwsvpcContainer("api", fooTask2Arn+"/api", "10.0.0.2"))
+	barTask1 := newAwsvpcTask(barClusterArn, barTask1Arn, taskDefArn, "service:api",
+		newAwsvpcContainer("api", barTask1Arn+"/api", "10.0.1.1"))
+	barTask2 := newAwsvpcTask(barClusterArn, barTask2Arn, taskDefArn, "service:api",
+		newAwsvpcContainer("api", barTask2Arn+"/api", "10.0.1.2"))
+
+	client := &mockEcsClient{}
+	// one cluster per page
+	setExpectationsListClustersInPages(client, []string{fooClusterArn}, []string{barClusterArn})
+	// one task per page
+	setExpectationsListAndDescribeTasksInPages(client, fooClusterArn, []types.Task{fooTask1}, []types.Task{fooTask2})
+	setExpectationsListAndDescribeTasksInPages(client, barClusterArn, []types.Task{barTask1}, []types.Task{barTask2})
+	// the same service runs in both clusters, so the shared definition is described once
+	setExpectationsDescribeTaskDefinition(client, taskDef)
+
+	labelConfig := &mockContainerLabelConfig{}
+	// every task's container is checked
+	labelConfig.On("ContainerScrapeConfigFromDefinition", containerDef).
+		Return(&ContainerLabelTaskConfig{Port: 8080, Path: "/metrics", Scheme: "http"}, nil).Times(4)
+
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
+
+	got, err := explorer.Discover(context.Background())
+
+	require.NoError(t, err)
+	// clusters are processed concurrently, so order isn't guaranteed
+	assert.ElementsMatch(t, []string{
+		fooTask1Arn + " api 10.0.0.1:8080 /metrics http",
+		fooTask2Arn + " api 10.0.0.2:8080 /metrics http",
+		barTask1Arn + " api 10.0.1.1:8080 /metrics http",
+		barTask2Arn + " api 10.0.1.2:8080 /metrics http",
+	}, targetSummaries(got))
+	client.AssertExpectations(t)
+	labelConfig.AssertExpectations(t)
+}
+
+func TestDiscover_WithClusterId_NoScrapableTasks(t *testing.T) {
+	clusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/foo"
+	task1Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/1"
+	task2Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/2"
+	task3Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/3"
+	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
+
+	containerDef := newContainerDefinition("api", "example/api:1.0", nil)
+	taskDef := newTaskDefinition(taskDefArn, "api", 1, containerDef)
+	task1 := newAwsvpcTask(clusterArn, task1Arn, taskDefArn, "service:api",
+		newAwsvpcContainer("api", task1Arn+"/api", "10.0.0.1"))
+	task2 := newAwsvpcTask(clusterArn, task2Arn, taskDefArn, "service:api",
+		newAwsvpcContainer("api", task2Arn+"/api", "10.0.0.2"))
+	task3 := newAwsvpcTask(clusterArn, task3Arn, taskDefArn, "service:api",
+		newAwsvpcContainer("api", task3Arn+"/api", "10.0.0.3"))
+
+	client := &mockEcsClient{}
+	setExpectationsDescribeClusters(client, []string{"foo"}, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, task1, task2, task3)
+	setExpectationsDescribeTaskDefinition(client, taskDef)
+
+	labelConfig := &mockContainerLabelConfig{}
+	// every task's container is checked, none is a scrape target
+	labelConfig.On("ContainerScrapeConfigFromDefinition", containerDef).Return(nil, nil).Times(3)
+
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig, clusterIds: []string{"foo"}}
+
+	got, err := explorer.Discover(context.Background())
+
+	require.NoError(t, err)
+	assert.NotNil(t, got)
+	assert.Empty(t, got)
+	client.AssertExpectations(t)
+	labelConfig.AssertExpectations(t)
+}
+
+func TestDiscover_WithClusterIds_DescribeClustersError(t *testing.T) {
 	apiErr := errors.New("describe clusters failed")
 
 	client := &mockEcsClient{}
@@ -227,19 +441,20 @@ func TestGetClusterARNs_WithClusterIds_DescribeClustersError(t *testing.T) {
 		Clusters: []string{"foo", "bar"},
 	}).Return(nil, apiErr).Once()
 
-	explorer := &EcsTaskExplorer{
-		ecs:        client,
-		clusterIds: []string{"foo", "bar"},
-	}
+	// no expectations: fails before any container is checked
+	labelConfig := &mockContainerLabelConfig{}
 
-	got, err := explorer.getClusterARNs(context.Background())
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig, clusterIds: []string{"foo", "bar"}}
+
+	got, err := explorer.Discover(context.Background())
 
 	assert.ErrorIs(t, err, apiErr)
 	assert.Nil(t, got)
 	client.AssertExpectations(t)
+	labelConfig.AssertExpectations(t)
 }
 
-func TestGetClusterARNs_WithClusterIds_DescribeClusters_Failures(t *testing.T) {
+func TestDiscover_WithClusterIds_DescribeClustersFailures(t *testing.T) {
 	missingArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/does_not_exist"
 	missingReason := "Cluster does not exist"
 
@@ -258,52 +473,26 @@ func TestGetClusterARNs_WithClusterIds_DescribeClusters_Failures(t *testing.T) {
 		},
 	}, nil).Once()
 
-	explorer := &EcsTaskExplorer{
-		ecs:        client,
-		clusterIds: []string{"foo", "does_not_exist"},
-	}
+	// no expectations: fails before any container is checked
+	labelConfig := &mockContainerLabelConfig{}
 
-	got, err := explorer.getClusterARNs(context.Background())
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig, clusterIds: []string{"foo", "does_not_exist"}}
+
+	got, err := explorer.Discover(context.Background())
 
 	assert.EqualError(t, err, fmt.Sprintf("failed to describe 1 cluster(s):\n- %s: %s", missingArn, missingReason))
 	assert.Nil(t, got)
 	client.AssertExpectations(t)
+	labelConfig.AssertExpectations(t)
 }
 
-func TestGetClusterARNs_WithoutClusterIds(t *testing.T) {
-	client := &mockEcsClient{}
-
-	client.On("ListClusters", mock.Anything, mock.MatchedBy(func(in *ecs.ListClustersInput) bool {
-		return in.NextToken == nil
-	})).Return(&ecs.ListClustersOutput{
-		ClusterArns: []string{"arn:aws:ecs:eu-central-1:123456789012:cluster/foo"},
-		NextToken:   aws.String("page-2"),
-	}, nil).Once()
-
-	client.On("ListClusters", mock.Anything, mock.MatchedBy(func(in *ecs.ListClustersInput) bool {
-		return aws.ToString(in.NextToken) == "page-2"
-	})).Return(&ecs.ListClustersOutput{
-		ClusterArns: []string{"arn:aws:ecs:eu-central-1:123456789012:cluster/bar"},
-	}, nil).Once()
-
-	explorer := &EcsTaskExplorer{ecs: client}
-
-	got, err := explorer.getClusterARNs(context.Background())
-
-	require.NoError(t, err)
-	assert.Equal(t, []string{
-		"arn:aws:ecs:eu-central-1:123456789012:cluster/foo",
-		"arn:aws:ecs:eu-central-1:123456789012:cluster/bar",
-	}, got)
-	client.AssertExpectations(t)
-}
-
-func TestGetDetailedTaskDataInClusters_ListTasks_ErrorOnLaterPage(t *testing.T) {
+func TestDiscover_ListTasksErrorOnLaterPage(t *testing.T) {
 	clusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/foo"
 	task1Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/1"
 	apiErr := errors.New("list tasks failed")
 
 	client := &mockEcsClient{}
+	setExpectationsListClusters(client, clusterArn)
 
 	// page 1 succeeds
 	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
@@ -325,23 +514,27 @@ func TestGetDetailedTaskDataInClusters_ListTasks_ErrorOnLaterPage(t *testing.T) 
 		NextToken: aws.String("page-2"),
 	}).Return(nil, apiErr).Once()
 
-	explorer := &EcsTaskExplorer{ecs: client}
+	// no expectations: fails before any task definition is described or container checked
+	labelConfig := &mockContainerLabelConfig{}
 
-	// fails before any task definition is described, so no DescribeTaskDefinition expectations
-	got, err := explorer.getDetailedTaskDataInClusters(context.Background(), []string{clusterArn})
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
+
+	got, err := explorer.Discover(context.Background())
 
 	assert.ErrorIs(t, err, apiErr)
 	assert.Nil(t, got, "no partial results should be returned alongside an error")
 	client.AssertExpectations(t)
+	labelConfig.AssertExpectations(t)
 }
 
-func TestGetDetailedTaskDataInClusters_DescribeTasks_ErrorOnLaterPage(t *testing.T) {
+func TestDiscover_DescribeTasksErrorOnLaterPage(t *testing.T) {
 	clusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/foo"
 	task1Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/1"
 	task2Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/2"
 	apiErr := errors.New("describe tasks failed")
 
 	client := &mockEcsClient{}
+	setExpectationsListClusters(client, clusterArn)
 
 	// page 1 succeeds
 	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
@@ -369,211 +562,21 @@ func TestGetDetailedTaskDataInClusters_DescribeTasks_ErrorOnLaterPage(t *testing
 		Tasks:   []string{task2Arn},
 	}).Return(nil, apiErr).Once()
 
-	explorer := &EcsTaskExplorer{ecs: client}
+	// no expectations: fails before any task definition is described or container checked
+	labelConfig := &mockContainerLabelConfig{}
 
-	// fails before any task definition is described, so no DescribeTaskDefinition expectations
-	got, err := explorer.getDetailedTaskDataInClusters(context.Background(), []string{clusterArn})
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
+
+	got, err := explorer.Discover(context.Background())
 
 	assert.ErrorIs(t, err, apiErr)
 	assert.Nil(t, got, "no partial results should be returned alongside an error")
 	client.AssertExpectations(t)
-}
-
-func TestGetDetailedTaskDataInClusters_SingleCluster_MultiplePages(t *testing.T) {
-	clusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/foo"
-	task1Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/1"
-	task2Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/2"
-	task3Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/3"
-	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
-
-	taskDef := newTaskDefinition(taskDefArn, "api", 1)
-
-	// it returns tasks regardless of state
-	// refer to https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-lifecycle-explanation.html
-	task1 := newAwsvpcTask(clusterArn, task1Arn, taskDefArn, "service:api")
-	task2 := newAwsvpcTask(clusterArn, task2Arn, taskDefArn, "service:api")
-	task2.LastStatus = aws.String("PENDING")
-	task3 := newAwsvpcTask(clusterArn, task3Arn, taskDefArn, "service:api")
-	task3.LastStatus = aws.String("STOPPED")
-
-	client := &mockEcsClient{}
-
-	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
-		Cluster: &clusterArn,
-	}).Return(&ecs.ListTasksOutput{
-		TaskArns:  []string{task1Arn, task2Arn},
-		NextToken: aws.String("page-2"),
-	}, nil).Once()
-	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
-		Cluster:   &clusterArn,
-		NextToken: aws.String("page-2"),
-	}).Return(&ecs.ListTasksOutput{
-		TaskArns: []string{task3Arn},
-	}, nil).Once()
-
-	client.On("DescribeTasks", mock.Anything, &ecs.DescribeTasksInput{
-		Cluster: &clusterArn,
-		Tasks:   []string{task1Arn, task2Arn},
-	}).Return(&ecs.DescribeTasksOutput{
-		Tasks: []types.Task{task1, task2},
-	}, nil).Once()
-	client.On("DescribeTasks", mock.Anything, &ecs.DescribeTasksInput{
-		Cluster: &clusterArn,
-		Tasks:   []string{task3Arn},
-	}).Return(&ecs.DescribeTasksOutput{
-		Tasks: []types.Task{task3},
-	}, nil).Once()
-
-	// all three tasks share the definition, so it's described once
-	client.On("DescribeTaskDefinition", mock.Anything, &ecs.DescribeTaskDefinitionInput{
-		TaskDefinition: aws.String(taskDefArn),
-	}).Return(&ecs.DescribeTaskDefinitionOutput{
-		TaskDefinition: &taskDef,
-	}, nil).Once()
-
-	explorer := &EcsTaskExplorer{ecs: client}
-
-	got, err := explorer.getDetailedTaskDataInClusters(context.Background(), []string{clusterArn})
-
-	require.NoError(t, err)
-	// single cluster, so page order is preserved
-	assert.Equal(t, []DetailedTaskData{
-		{task: task1, definition: taskDef},
-		{task: task2, definition: taskDef},
-		{task: task3, definition: taskDef},
-	}, got)
-	client.AssertExpectations(t)
-}
-
-func TestGetDetailedTaskDataInClusters_NoClusters(t *testing.T) {
-	// no expectations: any call to the mock panics
-	client := &mockEcsClient{}
-	explorer := &EcsTaskExplorer{ecs: client}
-
-	got, err := explorer.getDetailedTaskDataInClusters(context.Background(), []string{})
-
-	require.NoError(t, err)
-	assert.Empty(t, got)
-	client.AssertExpectations(t)
-}
-
-func TestGetDetailedTaskDataInClusters_ClusterWithNoTasks(t *testing.T) {
-	clusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/foo"
-
-	client := &mockEcsClient{}
-	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
-		Cluster: &clusterArn,
-	}).Return(&ecs.ListTasksOutput{
-		TaskArns: []string{},
-	}, nil).Once()
-	// no DescribeTasks expectation: real ECS rejects an empty task list, so calling it panics the mock
-
-	explorer := &EcsTaskExplorer{ecs: client}
-
-	got, err := explorer.getDetailedTaskDataInClusters(context.Background(), []string{clusterArn})
-
-	require.NoError(t, err)
-	assert.Empty(t, got)
-	client.AssertExpectations(t)
-}
-
-func TestGetDetailedTaskDataInClusters_SingleCluster(t *testing.T) {
-	clusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/foo"
-	task1Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/1"
-	task2Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/2"
-	apiTaskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
-	workerTaskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/worker:3"
-
-	apiTaskDef := newTaskDefinition(apiTaskDefArn, "api", 1)
-	workerTaskDef := newTaskDefinition(workerTaskDefArn, "worker", 3)
-
-	task1 := newAwsvpcTask(clusterArn, task1Arn, apiTaskDefArn, "service:api")
-	task2 := newAwsvpcTask(clusterArn, task2Arn, workerTaskDefArn, "service:worker")
-
-	client := &mockEcsClient{}
-	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
-		Cluster: &clusterArn,
-	}).Return(&ecs.ListTasksOutput{
-		TaskArns: []string{task1Arn, task2Arn},
-	}, nil).Once()
-	client.On("DescribeTasks", mock.Anything, &ecs.DescribeTasksInput{
-		Cluster: &clusterArn,
-		Tasks:   []string{task1Arn, task2Arn},
-	}).Return(&ecs.DescribeTasksOutput{
-		Tasks: []types.Task{task1, task2},
-	}, nil).Once()
-
-	// each task has its own definition
-	client.On("DescribeTaskDefinition", mock.Anything, &ecs.DescribeTaskDefinitionInput{
-		TaskDefinition: aws.String(apiTaskDefArn),
-	}).Return(&ecs.DescribeTaskDefinitionOutput{
-		TaskDefinition: &apiTaskDef,
-	}, nil).Once()
-	client.On("DescribeTaskDefinition", mock.Anything, &ecs.DescribeTaskDefinitionInput{
-		TaskDefinition: aws.String(workerTaskDefArn),
-	}).Return(&ecs.DescribeTaskDefinitionOutput{
-		TaskDefinition: &workerTaskDef,
-	}, nil).Once()
-
-	explorer := &EcsTaskExplorer{ecs: client}
-
-	got, err := explorer.getDetailedTaskDataInClusters(context.Background(), []string{clusterArn})
-
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []DetailedTaskData{
-		{task: task1, definition: apiTaskDef},
-		{task: task2, definition: workerTaskDef},
-	}, got)
-	client.AssertExpectations(t)
-}
-
-func TestGetDetailedTaskDataInClusters_TenClusters(t *testing.T) {
-	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
-	taskDef := newTaskDefinition(taskDefArn, "api", 1)
-
-	client := &mockEcsClient{}
-
-	// the same service runs in every cluster, so the shared definition is described once
-	client.On("DescribeTaskDefinition", mock.Anything, &ecs.DescribeTaskDefinitionInput{
-		TaskDefinition: aws.String(taskDefArn),
-	}).Return(&ecs.DescribeTaskDefinitionOutput{
-		TaskDefinition: &taskDef,
-	}, nil).Once()
-
-	var clusterArns []string
-	var want []DetailedTaskData
-	for i := 0; i < 10; i++ {
-		clusterArn := fmt.Sprintf("arn:aws:ecs:eu-central-1:123456789012:cluster/cluster-%d", i)
-		taskArn := fmt.Sprintf("arn:aws:ecs:eu-central-1:123456789012:task/cluster-%d/1", i)
-		task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "service:api")
-
-		client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
-			Cluster: &clusterArn,
-		}).Return(&ecs.ListTasksOutput{
-			TaskArns: []string{taskArn},
-		}, nil).Once()
-		client.On("DescribeTasks", mock.Anything, &ecs.DescribeTasksInput{
-			Cluster: &clusterArn,
-			Tasks:   []string{taskArn},
-		}).Return(&ecs.DescribeTasksOutput{
-			Tasks: []types.Task{task},
-		}, nil).Once()
-
-		clusterArns = append(clusterArns, clusterArn)
-		want = append(want, DetailedTaskData{task: task, definition: taskDef})
-	}
-
-	explorer := &EcsTaskExplorer{ecs: client}
-
-	got, err := explorer.getDetailedTaskDataInClusters(context.Background(), clusterArns)
-
-	require.NoError(t, err)
-	assert.ElementsMatch(t, want, got)
-	client.AssertExpectations(t)
+	labelConfig.AssertExpectations(t)
 }
 
 // Swaps the global logger output, so it must not run in parallel with other tests.
-func TestGetDetailedTaskDataInClusters_DescribeTasksFailuresAreLogged(t *testing.T) {
+func TestDiscover_DescribeTasksFailuresAreLogged(t *testing.T) {
 	logs := captureLogs(t)
 
 	clusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/foo"
@@ -582,10 +585,13 @@ func TestGetDetailedTaskDataInClusters_DescribeTasksFailuresAreLogged(t *testing
 	task3Arn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/3"
 	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
 
-	taskDef := newTaskDefinition(taskDefArn, "api", 1)
-	task1 := newAwsvpcTask(clusterArn, task1Arn, taskDefArn, "service:api")
+	containerDef := newContainerDefinition("api", "example/api:1.0", nil)
+	taskDef := newTaskDefinition(taskDefArn, "api", 1, containerDef)
+	task1 := newAwsvpcTask(clusterArn, task1Arn, taskDefArn, "service:api",
+		newAwsvpcContainer("api", task1Arn+"/api", "10.0.0.1"))
 
 	client := &mockEcsClient{}
+	setExpectationsListClusters(client, clusterArn)
 	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
 		Cluster: &clusterArn,
 	}).Return(&ecs.ListTasksOutput{
@@ -601,23 +607,23 @@ func TestGetDetailedTaskDataInClusters_DescribeTasksFailuresAreLogged(t *testing
 			{Arn: aws.String(task3Arn), Reason: aws.String("MISSING")},
 		},
 	}, nil).Once()
+	setExpectationsDescribeTaskDefinition(client, taskDef)
 
-	// only the described task's definition is fetched
-	client.On("DescribeTaskDefinition", mock.Anything, &ecs.DescribeTaskDefinitionInput{
-		TaskDefinition: aws.String(taskDefArn),
-	}).Return(&ecs.DescribeTaskDefinitionOutput{
-		TaskDefinition: &taskDef,
-	}, nil).Once()
+	labelConfig := &mockContainerLabelConfig{}
+	// only the described task's container is checked
+	labelConfig.On("ContainerScrapeConfigFromDefinition", containerDef).
+		Return(&ContainerLabelTaskConfig{Port: 8080, Path: "/metrics", Scheme: "http"}, nil).Once()
 
-	explorer := &EcsTaskExplorer{ecs: client}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
 
-	got, err := explorer.getDetailedTaskDataInClusters(context.Background(), []string{clusterArn})
+	got, err := explorer.Discover(context.Background())
 
 	require.NoError(t, err)
-	assert.Equal(t, []DetailedTaskData{{task: task1, definition: taskDef}}, got, "described tasks are still returned")
+	assert.Equal(t, []string{task1Arn + " api 10.0.0.1:8080 /metrics http"}, targetSummaries(got), "described tasks are still returned")
 	assert.Contains(t, logs.String(), fmt.Sprintf("Failed to describe task %s in cluster %s: MISSING", task2Arn, clusterArn))
 	assert.Contains(t, logs.String(), fmt.Sprintf("Failed to describe task %s in cluster %s: MISSING", task3Arn, clusterArn))
 	client.AssertExpectations(t)
+	labelConfig.AssertExpectations(t)
 }
 
 func TestDiscover_SingleScrapableContainer(t *testing.T) {
@@ -636,7 +642,7 @@ func TestDiscover_SingleScrapableContainer(t *testing.T) {
 	setExpectationsListAndDescribeTasks(client, clusterArn, task)
 	setExpectationsDescribeTaskDefinition(client, taskDef)
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -679,7 +685,7 @@ func TestDiscover_UnlabelledSidecarIsSkipped(t *testing.T) {
 	setExpectationsListAndDescribeTasks(client, clusterArn, task)
 	setExpectationsDescribeTaskDefinition(client, taskDef)
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -706,7 +712,7 @@ func TestDiscover_MultipleScrapableContainersInTask(t *testing.T) {
 	setExpectationsListAndDescribeTasks(client, clusterArn, task)
 	setExpectationsDescribeTaskDefinition(client, taskDef)
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -737,7 +743,7 @@ func TestDiscover_TasksSharingDefinition(t *testing.T) {
 	setExpectationsListAndDescribeTasks(client, clusterArn, task1, task2)
 	setExpectationsDescribeTaskDefinition(client, taskDef) // .Once(): shared definition is only described once
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -773,7 +779,7 @@ func TestDiscover_MultipleClusters(t *testing.T) {
 	setExpectationsDescribeTaskDefinition(client, apiTaskDef)
 	setExpectationsDescribeTaskDefinition(client, workerTaskDef)
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -783,21 +789,6 @@ func TestDiscover_MultipleClusters(t *testing.T) {
 		fooTaskArn + " api 10.0.0.1:8080 /metrics http",
 		barTaskArn + " worker 10.0.1.1:9100 /prom https",
 	}, targetSummaries(got))
-	client.AssertExpectations(t)
-}
-
-func TestDiscover_NoClusters(t *testing.T) {
-	client := &mockEcsClient{}
-	setExpectationsListClusters(client)
-
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
-
-	got, err := explorer.Discover(context.Background())
-
-	require.NoError(t, err)
-	// non-nil so the written file is `[]` rather than `null`
-	assert.NotNil(t, got)
-	assert.Empty(t, got)
 	client.AssertExpectations(t)
 }
 
@@ -816,7 +807,7 @@ func TestDiscover_NoScrapableContainers(t *testing.T) {
 	setExpectationsListAndDescribeTasks(client, clusterArn, task)
 	setExpectationsDescribeTaskDefinition(client, taskDef)
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -846,7 +837,7 @@ func TestDiscover_InvalidLabelsAreLoggedAndSkipped(t *testing.T) {
 	setExpectationsListAndDescribeTasks(client, clusterArn, task)
 	setExpectationsDescribeTaskDefinition(client, taskDef)
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -878,7 +869,7 @@ func TestDiscover_ContainerMissingFromTaskIsLoggedAndSkipped(t *testing.T) {
 	setExpectationsListAndDescribeTasks(client, clusterArn, task)
 	setExpectationsDescribeTaskDefinition(client, taskDef)
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -907,7 +898,7 @@ func TestDiscover_ContainerWithoutIPIsLoggedAndSkipped(t *testing.T) {
 	setExpectationsListAndDescribeTasks(client, clusterArn, task)
 	setExpectationsDescribeTaskDefinition(client, taskDef)
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -936,7 +927,7 @@ func TestDiscover_UsesFirstNonEmptyIP(t *testing.T) {
 	setExpectationsListAndDescribeTasks(client, clusterArn, task)
 	setExpectationsDescribeTaskDefinition(client, taskDef)
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -975,7 +966,7 @@ func TestDiscover_DescribeTaskDefinitionErrorIsLoggedAndSkipped(t *testing.T) {
 	}).Return(nil, apiErr).Times(2)
 	setExpectationsDescribeTaskDefinition(client, okTaskDef)
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -1006,7 +997,7 @@ func TestDiscover_DescribeTaskDefinitionWithoutDefinitionIsLoggedAndSkipped(t *t
 		TaskDefinition: aws.String(taskDefArn),
 	}).Return(&ecs.DescribeTaskDefinitionOutput{}, nil).Once()
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -1022,7 +1013,7 @@ func TestDiscover_ListClustersError(t *testing.T) {
 	client := &mockEcsClient{}
 	client.On("ListClusters", mock.Anything, &ecs.ListClustersInput{}).Return(nil, apiErr).Once()
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 
@@ -1041,7 +1032,7 @@ func TestDiscover_ListTasksError(t *testing.T) {
 		Cluster: aws.String(clusterArn),
 	}).Return(nil, apiErr).Once()
 
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
 	got, err := explorer.Discover(context.Background())
 

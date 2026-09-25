@@ -7,6 +7,11 @@ import (
 	ecstypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 )
 
+// ContainerLabelConfig works out a container scrape config from its definition docker labels
+type ContainerLabelConfig interface {
+	ContainerScrapeConfigFromDefinition(containerDef ecstypes.ContainerDefinition) (*ContainerLabelTaskConfig, error)
+}
+
 // ExplorerContainerLabelConfig defines docker label names to scan to identify scrapable targets
 type ExplorerContainerLabelConfig struct {
 	FilterLabel string
