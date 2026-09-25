@@ -50,22 +50,22 @@ type appConfig struct {
 
 // parseConfig parses command line arguments (without the program name); usage and parse errors go to output.
 func parseConfig(args []string, output io.Writer) (appConfig, error) {
-	fs := flag.NewFlagSet("prometheus-ecs-discovery", flag.ContinueOnError)
-	fs.SetOutput(output)
+	commandLine := flag.NewFlagSet("prometheus-ecs-discovery", flag.ContinueOnError)
+	commandLine.SetOutput(output)
 
 	var cfg appConfig
 	var clusterIds stringsFlag
-	fs.Var(&clusterIds, "config.cluster", "name or ARN of a cluster to scrape; repeat for multiple clusters (none = all clusters, max 100)")
-	fs.StringVar(&cfg.outFile, "config.write-to", "ecs_file_sd.yml", "path of file to write ECS service discovery information to")
-	fs.DurationVar(&cfg.interval, "config.scrape-interval", 60*time.Second, "interval at which to scrape the AWS API for ECS service discovery information")
-	fs.IntVar(&cfg.times, "config.scrape-times", 0, "how many times to scrape before exiting (0 = infinite)")
-	fs.StringVar(&cfg.roleArn, "config.role-arn", "", "ARN of the role to assume when scraping the AWS API (optional)")
-	fs.StringVar(&cfg.labelConfig.FilterLabel, "config.filter-label", "prometheus.io/scrape", "Docker label that must be set to \"true\" for a container to be scraped")
-	fs.StringVar(&cfg.labelConfig.PortLabel, "config.port-label", "prometheus.io/port", "Docker label to define the scrape port of the application (required)")
-	fs.StringVar(&cfg.labelConfig.PathLabel, "config.path-label", "prometheus.io/path", "Docker label to define the scrape path of the application (required)")
-	fs.StringVar(&cfg.labelConfig.SchemeLabel, "config.scheme-label", "prometheus.io/scheme", "Docker label to define the scheme (http or https) of the application (required)")
+	commandLine.Var(&clusterIds, "config.cluster", "name or ARN of a cluster to scrape; repeat for multiple clusters (up to 100 max; none = all clusters)")
+	commandLine.StringVar(&cfg.outFile, "config.write-to", "ecs_file_sd.yml", "path of file to write ECS service discovery information to")
+	commandLine.DurationVar(&cfg.interval, "config.scrape-interval", 60*time.Second, "interval at which to scrape the AWS API for ECS service discovery information")
+	commandLine.IntVar(&cfg.times, "config.scrape-times", 0, "how many times to scrape before exiting (0 = infinite)")
+	commandLine.StringVar(&cfg.roleArn, "config.role-arn", "", "ARN of the role to assume when scraping the AWS API (optional)")
+	commandLine.StringVar(&cfg.labelConfig.FilterLabel, "config.filter-label", "prometheus.io/scrape", "Docker label that must be set to \"true\" for a container to be scraped")
+	commandLine.StringVar(&cfg.labelConfig.PortLabel, "config.port-label", "prometheus.io/port", "Docker label to define the scrape port of the application (required)")
+	commandLine.StringVar(&cfg.labelConfig.PathLabel, "config.path-label", "prometheus.io/path", "Docker label to define the scrape path of the application (required)")
+	commandLine.StringVar(&cfg.labelConfig.SchemeLabel, "config.scheme-label", "prometheus.io/scheme", "Docker label to define the scheme (http or https) of the application (required)")
 
-	if err := fs.Parse(args); err != nil {
+	if err := commandLine.Parse(args); err != nil {
 		return appConfig{}, err
 	}
 

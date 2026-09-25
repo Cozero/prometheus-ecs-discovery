@@ -119,6 +119,7 @@ From the root
 ```
   ./prometheus-ecs-discovery \
     -config.cluster=my-cluster \
+    -config.cluster=another-cluster \
     -config.write-to=ecs_file_sd.yml \
     -config.scrape-times=1
 ```
