@@ -41,10 +41,7 @@ The command line parameters that can be used are:
   (if missing an application won't be scraped) (default "PROMETHEUS_EXPORTER_PORT")
 
 ## Usage
-
-First, build this program using the usual `go get` mechanism.
-
-Then, run it as follows:
+Run it as follows:
 
 * Ensure the program can write to a directory readable by
   your Prometheus master instance(s).
@@ -109,6 +106,12 @@ master configuration, this program will begin informing via
 the discovery file of new targets that Prometheus must scrape.
 
 ## Build
+Install deps
+
+`go install`
+
+Then, build
+
 `go build`
 
 

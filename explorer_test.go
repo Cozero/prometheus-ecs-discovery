@@ -26,8 +26,8 @@ type mockEcsClient struct {
 var _ EcsAPIClient = (*mockEcsClient)(nil)
 
 func (m *mockEcsClient) DescribeClusters(
-	ctx context.Context, 
-	in *ecs.DescribeClustersInput, 
+	ctx context.Context,
+	in *ecs.DescribeClustersInput,
 	_ ...func(*ecs.Options),
 ) (*ecs.DescribeClustersOutput, error) {
 	args := m.Called(ctx, in)
@@ -36,8 +36,8 @@ func (m *mockEcsClient) DescribeClusters(
 }
 
 func (m *mockEcsClient) ListClusters(
-	ctx context.Context, 
-	in *ecs.ListClustersInput, 
+	ctx context.Context,
+	in *ecs.ListClustersInput,
 	_ ...func(*ecs.Options),
 ) (*ecs.ListClustersOutput, error) {
 	args := m.Called(ctx, in)
@@ -46,8 +46,8 @@ func (m *mockEcsClient) ListClusters(
 }
 
 func (m *mockEcsClient) ListTasks(
-	ctx context.Context, 
-	in *ecs.ListTasksInput, 
+	ctx context.Context,
+	in *ecs.ListTasksInput,
 	_ ...func(*ecs.Options),
 ) (*ecs.ListTasksOutput, error) {
 	args := m.Called(ctx, in)
@@ -56,8 +56,8 @@ func (m *mockEcsClient) ListTasks(
 }
 
 func (m *mockEcsClient) DescribeTasks(
-	ctx context.Context, 
-	in *ecs.DescribeTasksInput, 
+	ctx context.Context,
+	in *ecs.DescribeTasksInput,
 	_ ...func(*ecs.Options),
 ) (*ecs.DescribeTasksOutput, error) {
 	args := m.Called(ctx, in)
@@ -66,8 +66,8 @@ func (m *mockEcsClient) DescribeTasks(
 }
 
 func (m *mockEcsClient) DescribeTaskDefinition(
-	ctx context.Context, 
-	in *ecs.DescribeTaskDefinitionInput, 
+	ctx context.Context,
+	in *ecs.DescribeTaskDefinitionInput,
 	_ ...func(*ecs.Options),
 ) (*ecs.DescribeTaskDefinitionOutput, error) {
 	args := m.Called(ctx, in)
@@ -151,7 +151,7 @@ func newTaskDefinition(
 * ===================
 * helper expectations
 * ===================
-*/
+ */
 
 // setExpectationsDescribeClusters mocks DescribeClusters finding every cluster asked for, with no failures
 func setExpectationsDescribeClusters(client *mockEcsClient, clusterIds []string, clusterArns ...string) {
@@ -253,7 +253,7 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 * ===================
 * TESTS
 * ===================
-*/
+ */
 
 func TestDiscover_NoClusterIds_NoClustersFound(t *testing.T) {
 	client := &mockEcsClient{}
