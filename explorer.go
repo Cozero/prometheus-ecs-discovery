@@ -43,6 +43,11 @@ type DiscoveredTaskTargets struct {
 	Labels  labels   `yaml:"labels"`
 }
 
+// Explorer discovers the targets Prometheus should scrape
+type Explorer interface {
+	Discover(ctx context.Context) ([]*DiscoveredTaskTargets, error)
+}
+
 // EcsTaskExplorer discovers ECS tasks
 // Only supports tasks running with awsvpc network mode (for now)
 type EcsTaskExplorer struct {

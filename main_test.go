@@ -10,11 +10,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// mockExplorer implements Explorer for tests.
+type mockExplorer struct {
+	mock.Mock
+}
+
+func (m *mockExplorer) Discover(ctx context.Context) ([]*DiscoveredTaskTargets, error) {
+	args := m.Called(ctx)
+	out, _ := args.Get(0).([]*DiscoveredTaskTargets)
+	return out, args.Error(1)
+}
 
 func TestParseConfig_Defaults(t *testing.T) {
 	cfg, err := parseConfig(nil, ioutil.Discard)
@@ -102,21 +112,39 @@ func TestParseConfig_Help(t *testing.T) {
 }
 
 func TestExecute_WritesDiscoveredTargets(t *testing.T) {
-	clusterArn := "arn:aws:ecs:eu-central-1:123456789012:cluster/foo"
-	taskArn := "arn:aws:ecs:eu-central-1:123456789012:task/foo/1"
-	containerArn := "arn:aws:ecs:eu-central-1:123456789012:container/foo/1/api"
-	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:3"
-
-	taskDef := newTaskDefinition(taskDefArn, "api", 3,
-		newContainerDefinition("api", "someOrg/api:1.0", scrapeDockerLabels("8080", "/metrics", "http")))
-	task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "my-service:api",
-		newAwsvpcContainer("api", containerArn, "10.0.0.1"))
-
-	client := &mockEcsClient{}
-	setExpectationsListClusters(client, clusterArn)
-	setExpectationsListAndDescribeTasks(client, clusterArn, task)
-	setExpectationsDescribeTaskDefinition(client, taskDef)
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &mockExplorer{}
+	explorer.On("Discover", mock.Anything).Return([]*DiscoveredTaskTargets{
+		{
+			Targets: []string{"10.0.0.1:8080"},
+			Labels: labels{
+				TaskArn:       "arn:aws:ecs:eu-central-1:123456789012:task/cluster-foo/12345",
+				TaskName:      "my-api",
+				TaskRevision:  "3",
+				TaskGroup:     "service:my-api",
+				ClusterArn:    "arn:aws:ecs:eu-central-1:123456789012:cluster/cluster-foo",
+				ContainerName: "api",
+				ContainerArn:  "arn:aws:ecs:eu-central-1:123456789012:container/cluster-foo/12345/some-uuid",
+				DockerImage:   "MyOrg/my-api:1.0",
+				MetricsPath:   "/api/metrics",
+				Scheme:        "https",
+			},
+		},
+		{
+			Targets: []string{"10.1.3.187:3000"},
+			Labels: labels{
+				TaskArn:       "arn:aws:ecs:eu-central-1:123456789012:task/cluster-bar/67890",
+				TaskName:      "async-worker",
+				TaskRevision:  "1017",
+				TaskGroup:     "service:async-worker",
+				ClusterArn:    "arn:aws:ecs:eu-central-1:123456789012:cluster/cluster-bar",
+				ContainerName: "worker",
+				ContainerArn:  "arn:aws:ecs:eu-central-1:123456789012:container/cluster-bar/67890/another-uuid",
+				DockerImage:   "AnotherOrg/async-worker:0.0.1",
+				MetricsPath:   "/metrics",
+				Scheme:        "http",
+			},
+		},
+	}, nil).Once()
 
 	outFile := filepath.Join(t.TempDir(), "ecs_file_sd.yml")
 	cfg := appConfig{outFile: outFile, times: 1}
@@ -129,24 +157,36 @@ func TestExecute_WritesDiscoveredTargets(t *testing.T) {
 	assert.Equal(t, `- targets:
   - 10.0.0.1:8080
   labels:
-    task_arn: arn:aws:ecs:eu-central-1:123456789012:task/foo/1
-    task_name: api
+    task_arn: arn:aws:ecs:eu-central-1:123456789012:task/cluster-foo/12345
+    task_name: my-api
     task_revision: "3"
-    task_group: my-service:api
-    cluster_arn: arn:aws:ecs:eu-central-1:123456789012:cluster/foo
+    task_group: service:my-api
+    cluster_arn: arn:aws:ecs:eu-central-1:123456789012:cluster/cluster-foo
     container_name: api
-    container_arn: arn:aws:ecs:eu-central-1:123456789012:container/foo/1/api
-    docker_image: someOrg/api:1.0
+    container_arn: arn:aws:ecs:eu-central-1:123456789012:container/cluster-foo/12345/some-uuid
+    docker_image: MyOrg/my-api:1.0
+    __metrics_path__: /api/metrics
+    __scheme__: https
+- targets:
+  - 10.1.3.187:3000
+  labels:
+    task_arn: arn:aws:ecs:eu-central-1:123456789012:task/cluster-bar/67890
+    task_name: async-worker
+    task_revision: "1017"
+    task_group: service:async-worker
+    cluster_arn: arn:aws:ecs:eu-central-1:123456789012:cluster/cluster-bar
+    container_name: worker
+    container_arn: arn:aws:ecs:eu-central-1:123456789012:container/cluster-bar/67890/another-uuid
+    docker_image: AnotherOrg/async-worker:0.0.1
     __metrics_path__: /metrics
     __scheme__: http
 `, string(written))
-	client.AssertExpectations(t)
+	explorer.AssertExpectations(t)
 }
 
 func TestExecute_NoTargets_WritesEmptyList(t *testing.T) {
-	client := &mockEcsClient{}
-	setExpectationsListClusters(client)
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &mockExplorer{}
+	explorer.On("Discover", mock.Anything).Return([]*DiscoveredTaskTargets{}, nil).Once()
 
 	outFile := filepath.Join(t.TempDir(), "ecs_file_sd.yml")
 	cfg := appConfig{outFile: outFile, times: 1}
@@ -157,13 +197,12 @@ func TestExecute_NoTargets_WritesEmptyList(t *testing.T) {
 	require.NoError(t, err)
 	// `[]` rather than `null`, so Prometheus sees an empty target list
 	assert.Equal(t, "[]\n", string(written))
-	client.AssertExpectations(t)
+	explorer.AssertExpectations(t)
 }
 
 func TestExecute_DiscoveryErrorDoesNotWriteFile(t *testing.T) {
-	client := &mockEcsClient{}
-	client.On("ListClusters", mock.Anything, &ecs.ListClustersInput{}).Return(nil, errors.New("list clusters failed")).Once()
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &mockExplorer{}
+	explorer.On("Discover", mock.Anything).Return(nil, errors.New("discovery failed")).Once()
 
 	outFile := filepath.Join(t.TempDir(), "ecs_file_sd.yml")
 	cfg := appConfig{outFile: outFile, times: 1}
@@ -172,13 +211,12 @@ func TestExecute_DiscoveryErrorDoesNotWriteFile(t *testing.T) {
 
 	// a failed run must not overwrite the last good targets with nothing
 	assert.NoFileExists(t, outFile)
-	client.AssertExpectations(t)
+	explorer.AssertExpectations(t)
 }
 
 func TestExecute_RunsScrapeTimes(t *testing.T) {
-	client := &mockEcsClient{}
-	client.On("ListClusters", mock.Anything, &ecs.ListClustersInput{}).Return(&ecs.ListClustersOutput{}, nil).Times(3)
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &mockExplorer{}
+	explorer.On("Discover", mock.Anything).Return([]*DiscoveredTaskTargets{}, nil).Times(3)
 
 	cfg := appConfig{outFile: filepath.Join(t.TempDir(), "ecs_file_sd.yml"), times: 3}
 
@@ -189,14 +227,13 @@ func TestExecute_RunsScrapeTimes(t *testing.T) {
 
 	execute(context.Background(), cfg, explorer, ticks)
 
-	client.AssertExpectations(t)
+	explorer.AssertExpectations(t)
 	assert.Empty(t, ticks, "every tick was consumed")
 }
 
 func TestExecute_WhenScrapeTimesIsZero_RunsUntilCancelled(t *testing.T) {
-	client := &mockEcsClient{}
-	client.On("ListClusters", mock.Anything, &ecs.ListClustersInput{}).Return(&ecs.ListClustersOutput{}, nil).Times(3)
-	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
+	explorer := &mockExplorer{}
+	explorer.On("Discover", mock.Anything).Return([]*DiscoveredTaskTargets{}, nil).Times(3)
 
 	cfg := appConfig{outFile: filepath.Join(t.TempDir(), "ecs_file_sd.yml"), times: 0}
 
@@ -211,5 +248,5 @@ func TestExecute_WhenScrapeTimesIsZero_RunsUntilCancelled(t *testing.T) {
 
 	execute(ctx, cfg, explorer, ticks)
 
-	client.AssertExpectations(t)
+	explorer.AssertExpectations(t)
 }

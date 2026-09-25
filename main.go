@@ -102,7 +102,7 @@ func writeTargets(path string, targets []*DiscoveredTaskTargets) error {
 
 // execute runs discovery once straight away, then on every tick, until cfg.times runs are done
 // (0 = forever) or ctx is cancelled. A failed run is logged and doesn't stop the loop.
-func execute(ctx context.Context, cfg appConfig, explorer *EcsTaskExplorer, ticks <-chan time.Time) {
+func execute(ctx context.Context, cfg appConfig, explorer Explorer, ticks <-chan time.Time) {
 	work := func() {
 		targets, err := explorer.Discover(ctx)
 		if err != nil {
