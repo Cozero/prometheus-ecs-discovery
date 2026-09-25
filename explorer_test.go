@@ -25,122 +25,54 @@ type mockEcsClient struct {
 // fails compilation if mockEcsClient stops implementing EcsAPIClient, e.g. when a method is added to it
 var _ EcsAPIClient = (*mockEcsClient)(nil)
 
-func (m *mockEcsClient) DescribeClusters(ctx context.Context, in *ecs.DescribeClustersInput, _ ...func(*ecs.Options)) (*ecs.DescribeClustersOutput, error) {
+func (m *mockEcsClient) DescribeClusters(
+	ctx context.Context, 
+	in *ecs.DescribeClustersInput, 
+	_ ...func(*ecs.Options),
+) (*ecs.DescribeClustersOutput, error) {
 	args := m.Called(ctx, in)
 	out, _ := args.Get(0).(*ecs.DescribeClustersOutput)
 	return out, args.Error(1)
 }
 
-func (m *mockEcsClient) ListClusters(ctx context.Context, in *ecs.ListClustersInput, _ ...func(*ecs.Options)) (*ecs.ListClustersOutput, error) {
+func (m *mockEcsClient) ListClusters(
+	ctx context.Context, 
+	in *ecs.ListClustersInput, 
+	_ ...func(*ecs.Options),
+) (*ecs.ListClustersOutput, error) {
 	args := m.Called(ctx, in)
 	out, _ := args.Get(0).(*ecs.ListClustersOutput)
 	return out, args.Error(1)
 }
 
-func (m *mockEcsClient) ListTasks(ctx context.Context, in *ecs.ListTasksInput, _ ...func(*ecs.Options)) (*ecs.ListTasksOutput, error) {
+func (m *mockEcsClient) ListTasks(
+	ctx context.Context, 
+	in *ecs.ListTasksInput, 
+	_ ...func(*ecs.Options),
+) (*ecs.ListTasksOutput, error) {
 	args := m.Called(ctx, in)
 	out, _ := args.Get(0).(*ecs.ListTasksOutput)
 	return out, args.Error(1)
 }
 
-func (m *mockEcsClient) DescribeTasks(ctx context.Context, in *ecs.DescribeTasksInput, _ ...func(*ecs.Options)) (*ecs.DescribeTasksOutput, error) {
+func (m *mockEcsClient) DescribeTasks(
+	ctx context.Context, 
+	in *ecs.DescribeTasksInput, 
+	_ ...func(*ecs.Options),
+) (*ecs.DescribeTasksOutput, error) {
 	args := m.Called(ctx, in)
 	out, _ := args.Get(0).(*ecs.DescribeTasksOutput)
 	return out, args.Error(1)
 }
 
-func (m *mockEcsClient) DescribeTaskDefinition(ctx context.Context, in *ecs.DescribeTaskDefinitionInput, _ ...func(*ecs.Options)) (*ecs.DescribeTaskDefinitionOutput, error) {
+func (m *mockEcsClient) DescribeTaskDefinition(
+	ctx context.Context, 
+	in *ecs.DescribeTaskDefinitionInput, 
+	_ ...func(*ecs.Options),
+) (*ecs.DescribeTaskDefinitionOutput, error) {
 	args := m.Called(ctx, in)
 	out, _ := args.Get(0).(*ecs.DescribeTaskDefinitionOutput)
 	return out, args.Error(1)
-}
-
-// newTaskDefinition builds a task definition identified by its ARN.
-// Container definitions are optional and default to none.
-func newTaskDefinition(taskDefinitionArn string, family string, revision int32, containerDefinitions ...types.ContainerDefinition) types.TaskDefinition {
-	return types.TaskDefinition{
-		TaskDefinitionArn:    aws.String(taskDefinitionArn),
-		Family:               aws.String(family),
-		Revision:             revision,
-		ContainerDefinitions: containerDefinitions,
-	}
-}
-
-func newContainerDefinition(name string, image string, dockerLabels map[string]string) types.ContainerDefinition {
-	return types.ContainerDefinition{
-		Name:         aws.String(name),
-		Image:        aws.String(image),
-		DockerLabels: dockerLabels,
-	}
-}
-
-// scrapeLabels returns docker labels that make a container a scrape target under testLabelConfig.
-func scrapeLabels(port string, path string, scheme string) map[string]string {
-	return map[string]string{
-		testLabelConfig.FilterLabel: "true",
-		testLabelConfig.PortLabel:   port,
-		testLabelConfig.PathLabel:   path,
-		testLabelConfig.SchemeLabel: scheme,
-	}
-}
-
-// newAwsvpcTask builds a RUNNING task; containers are optional.
-func newAwsvpcTask(clusterArn string, taskArn string, taskDefinitionArn string, group string, containers ...types.Container) types.Task {
-	return types.Task{
-		TaskArn:           aws.String(taskArn),
-		TaskDefinitionArn: aws.String(taskDefinitionArn),
-		ClusterArn:        aws.String(clusterArn),
-		Group:             aws.String(group),
-		LastStatus:        aws.String("RUNNING"),
-		Containers:        containers,
-	}
-}
-
-// newAwsvpcContainer builds a running container; an empty ip means no network interface attached yet.
-func newAwsvpcContainer(name string, containerArn string, ip string) types.Container {
-	container := types.Container{
-		Name:         aws.String(name),
-		ContainerArn: aws.String(containerArn),
-		LastStatus:   aws.String("RUNNING"),
-	}
-	if ip != "" {
-		container.NetworkInterfaces = []types.NetworkInterface{{PrivateIpv4Address: aws.String(ip)}}
-	}
-	return container
-}
-
-// expectClusters mocks ListClusters (no cluster IDs configured) returning a single page.
-func expectClusters(client *mockEcsClient, clusterArns ...string) {
-	client.On("ListClusters", mock.Anything, &ecs.ListClustersInput{}).Return(&ecs.ListClustersOutput{
-		ClusterArns: clusterArns,
-	}, nil).Once()
-}
-
-// expectTasksInCluster mocks a single page of ListTasks + DescribeTasks for the cluster.
-func expectTasksInCluster(client *mockEcsClient, clusterArn string, tasks ...types.Task) {
-	taskArns := make([]string, 0, len(tasks))
-	for _, task := range tasks {
-		taskArns = append(taskArns, aws.ToString(task.TaskArn))
-	}
-	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
-		Cluster: aws.String(clusterArn),
-	}).Return(&ecs.ListTasksOutput{
-		TaskArns: taskArns,
-	}, nil).Once()
-	client.On("DescribeTasks", mock.Anything, &ecs.DescribeTasksInput{
-		Cluster: aws.String(clusterArn),
-		Tasks:   taskArns,
-	}).Return(&ecs.DescribeTasksOutput{
-		Tasks: tasks,
-	}, nil).Once()
-}
-
-func expectTaskDefinition(client *mockEcsClient, taskDefinition types.TaskDefinition) {
-	client.On("DescribeTaskDefinition", mock.Anything, &ecs.DescribeTaskDefinitionInput{
-		TaskDefinition: taskDefinition.TaskDefinitionArn,
-	}).Return(&ecs.DescribeTaskDefinitionOutput{
-		TaskDefinition: &taskDefinition,
-	}, nil).Once()
 }
 
 // targetSummaries flattens discovered targets into readable one-liners, for order-independent comparison.
@@ -596,14 +528,14 @@ func TestDiscover_SingleScrapableContainer(t *testing.T) {
 	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:3"
 
 	taskDef := newTaskDefinition(taskDefArn, "api", 3,
-		newContainerDefinition("api", "example/api:1.0", scrapeLabels("8080", "/metrics", "http")))
+		newContainerDefinition("api", "example/api:1.0", scrapeDockerLabels("8080", "/metrics", "http")))
 	task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "service:api",
 		newAwsvpcContainer("api", containerArn, "10.0.0.1"))
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
-	expectTasksInCluster(client, clusterArn, task)
-	expectTaskDefinition(client, taskDef)
+	setExpectationsListClusters(client, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, task)
+	setExpectationsDescribeTaskDefinition(client, taskDef)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
@@ -637,16 +569,16 @@ func TestDiscover_UnlabelledSidecarIsSkipped(t *testing.T) {
 	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
 
 	taskDef := newTaskDefinition(taskDefArn, "api", 1,
-		newContainerDefinition("api", "example/api:1.0", scrapeLabels("8080", "/metrics", "http")),
+		newContainerDefinition("api", "example/api:1.0", scrapeDockerLabels("8080", "/metrics", "http")),
 		newContainerDefinition("envoy", "envoyproxy/envoy:v1.20", nil))
 	task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "service:api",
 		newAwsvpcContainer("api", taskArn+"/api", "10.0.0.1"),
 		newAwsvpcContainer("envoy", taskArn+"/envoy", "10.0.0.1"))
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
-	expectTasksInCluster(client, clusterArn, task)
-	expectTaskDefinition(client, taskDef)
+	setExpectationsListClusters(client, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, task)
+	setExpectationsDescribeTaskDefinition(client, taskDef)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
@@ -663,17 +595,17 @@ func TestDiscover_MultipleScrapableContainersInTask(t *testing.T) {
 	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
 
 	taskDef := newTaskDefinition(taskDefArn, "api", 1,
-		newContainerDefinition("api", "example/api:1.0", scrapeLabels("8080", "/metrics", "http")),
-		newContainerDefinition("worker", "example/worker:1.0", scrapeLabels("9100", "/prom", "https")))
+		newContainerDefinition("api", "example/api:1.0", scrapeDockerLabels("8080", "/metrics", "http")),
+		newContainerDefinition("worker", "example/worker:1.0", scrapeDockerLabels("9100", "/prom", "https")))
 	// awsvpc: containers in a task share the task's network interface
 	task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "service:api",
 		newAwsvpcContainer("api", taskArn+"/api", "10.0.0.1"),
 		newAwsvpcContainer("worker", taskArn+"/worker", "10.0.0.1"))
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
-	expectTasksInCluster(client, clusterArn, task)
-	expectTaskDefinition(client, taskDef)
+	setExpectationsListClusters(client, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, task)
+	setExpectationsDescribeTaskDefinition(client, taskDef)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
@@ -695,16 +627,16 @@ func TestDiscover_TasksSharingDefinition(t *testing.T) {
 	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
 
 	taskDef := newTaskDefinition(taskDefArn, "api", 1,
-		newContainerDefinition("api", "example/api:1.0", scrapeLabels("8080", "/metrics", "http")))
+		newContainerDefinition("api", "example/api:1.0", scrapeDockerLabels("8080", "/metrics", "http")))
 	task1 := newAwsvpcTask(clusterArn, task1Arn, taskDefArn, "service:api",
 		newAwsvpcContainer("api", task1Arn+"/api", "10.0.0.1"))
 	task2 := newAwsvpcTask(clusterArn, task2Arn, taskDefArn, "service:api",
 		newAwsvpcContainer("api", task2Arn+"/api", "10.0.0.2"))
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
-	expectTasksInCluster(client, clusterArn, task1, task2)
-	expectTaskDefinition(client, taskDef) // .Once(): shared definition is only described once
+	setExpectationsListClusters(client, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, task1, task2)
+	setExpectationsDescribeTaskDefinition(client, taskDef) // .Once(): shared definition is only described once
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
@@ -727,20 +659,20 @@ func TestDiscover_MultipleClusters(t *testing.T) {
 	workerTaskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/worker:1"
 
 	apiTaskDef := newTaskDefinition(apiTaskDefArn, "api", 1,
-		newContainerDefinition("api", "example/api:1.0", scrapeLabels("8080", "/metrics", "http")))
+		newContainerDefinition("api", "example/api:1.0", scrapeDockerLabels("8080", "/metrics", "http")))
 	workerTaskDef := newTaskDefinition(workerTaskDefArn, "worker", 1,
-		newContainerDefinition("worker", "example/worker:1.0", scrapeLabels("9100", "/prom", "https")))
+		newContainerDefinition("worker", "example/worker:1.0", scrapeDockerLabels("9100", "/prom", "https")))
 	fooTask := newAwsvpcTask(fooClusterArn, fooTaskArn, apiTaskDefArn, "service:api",
 		newAwsvpcContainer("api", fooTaskArn+"/api", "10.0.0.1"))
 	barTask := newAwsvpcTask(barClusterArn, barTaskArn, workerTaskDefArn, "service:worker",
 		newAwsvpcContainer("worker", barTaskArn+"/worker", "10.0.1.1"))
 
 	client := &mockEcsClient{}
-	expectClusters(client, fooClusterArn, barClusterArn)
-	expectTasksInCluster(client, fooClusterArn, fooTask)
-	expectTasksInCluster(client, barClusterArn, barTask)
-	expectTaskDefinition(client, apiTaskDef)
-	expectTaskDefinition(client, workerTaskDef)
+	setExpectationsListClusters(client, fooClusterArn, barClusterArn)
+	setExpectationsListAndDescribeTasks(client, fooClusterArn, fooTask)
+	setExpectationsListAndDescribeTasks(client, barClusterArn, barTask)
+	setExpectationsDescribeTaskDefinition(client, apiTaskDef)
+	setExpectationsDescribeTaskDefinition(client, workerTaskDef)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
@@ -757,7 +689,7 @@ func TestDiscover_MultipleClusters(t *testing.T) {
 
 func TestDiscover_NoClusters(t *testing.T) {
 	client := &mockEcsClient{}
-	expectClusters(client)
+	setExpectationsListClusters(client)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
@@ -781,9 +713,9 @@ func TestDiscover_NoScrapableContainers(t *testing.T) {
 		newAwsvpcContainer("api", taskArn+"/api", "10.0.0.1"))
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
-	expectTasksInCluster(client, clusterArn, task)
-	expectTaskDefinition(client, taskDef)
+	setExpectationsListClusters(client, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, task)
+	setExpectationsDescribeTaskDefinition(client, taskDef)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
@@ -804,16 +736,16 @@ func TestDiscover_InvalidLabelsAreLoggedAndSkipped(t *testing.T) {
 	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
 
 	taskDef := newTaskDefinition(taskDefArn, "api", 1,
-		newContainerDefinition("api", "example/api:1.0", scrapeLabels("abc", "/metrics", "http")),
-		newContainerDefinition("worker", "example/worker:1.0", scrapeLabels("9100", "/prom", "https")))
+		newContainerDefinition("api", "example/api:1.0", scrapeDockerLabels("abc", "/metrics", "http")),
+		newContainerDefinition("worker", "example/worker:1.0", scrapeDockerLabels("9100", "/prom", "https")))
 	task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "service:api",
 		newAwsvpcContainer("api", taskArn+"/api", "10.0.0.1"),
 		newAwsvpcContainer("worker", taskArn+"/worker", "10.0.0.1"))
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
-	expectTasksInCluster(client, clusterArn, task)
-	expectTaskDefinition(client, taskDef)
+	setExpectationsListClusters(client, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, task)
+	setExpectationsDescribeTaskDefinition(client, taskDef)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
@@ -836,16 +768,16 @@ func TestDiscover_ContainerMissingFromTaskIsLoggedAndSkipped(t *testing.T) {
 	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
 
 	taskDef := newTaskDefinition(taskDefArn, "api", 1,
-		newContainerDefinition("api", "example/api:1.0", scrapeLabels("8080", "/metrics", "http")),
-		newContainerDefinition("worker", "example/worker:1.0", scrapeLabels("9100", "/prom", "https")))
+		newContainerDefinition("api", "example/api:1.0", scrapeDockerLabels("8080", "/metrics", "http")),
+		newContainerDefinition("worker", "example/worker:1.0", scrapeDockerLabels("9100", "/prom", "https")))
 	// the task has no running "api" container
 	task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "service:api",
 		newAwsvpcContainer("worker", taskArn+"/worker", "10.0.0.1"))
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
-	expectTasksInCluster(client, clusterArn, task)
-	expectTaskDefinition(client, taskDef)
+	setExpectationsListClusters(client, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, task)
+	setExpectationsDescribeTaskDefinition(client, taskDef)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
@@ -866,15 +798,15 @@ func TestDiscover_ContainerWithoutIPIsLoggedAndSkipped(t *testing.T) {
 	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
 
 	taskDef := newTaskDefinition(taskDefArn, "api", 1,
-		newContainerDefinition("api", "example/api:1.0", scrapeLabels("8080", "/metrics", "http")))
+		newContainerDefinition("api", "example/api:1.0", scrapeDockerLabels("8080", "/metrics", "http")))
 	// e.g. a PENDING task whose network interface isn't attached yet
 	task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "service:api",
 		newAwsvpcContainer("api", taskArn+"/api", ""))
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
-	expectTasksInCluster(client, clusterArn, task)
-	expectTaskDefinition(client, taskDef)
+	setExpectationsListClusters(client, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, task)
+	setExpectationsDescribeTaskDefinition(client, taskDef)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
@@ -892,7 +824,7 @@ func TestDiscover_UsesFirstNonEmptyIP(t *testing.T) {
 	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:1"
 
 	taskDef := newTaskDefinition(taskDefArn, "api", 1,
-		newContainerDefinition("api", "example/api:1.0", scrapeLabels("8080", "/metrics", "http")))
+		newContainerDefinition("api", "example/api:1.0", scrapeDockerLabels("8080", "/metrics", "http")))
 	container := newAwsvpcContainer("api", taskArn+"/api", "")
 	container.NetworkInterfaces = []types.NetworkInterface{
 		{PrivateIpv4Address: aws.String("")},
@@ -901,9 +833,9 @@ func TestDiscover_UsesFirstNonEmptyIP(t *testing.T) {
 	task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "service:api", container)
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
-	expectTasksInCluster(client, clusterArn, task)
-	expectTaskDefinition(client, taskDef)
+	setExpectationsListClusters(client, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, task)
+	setExpectationsDescribeTaskDefinition(client, taskDef)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
@@ -927,7 +859,7 @@ func TestDiscover_DescribeTaskDefinitionErrorIsLoggedAndSkipped(t *testing.T) {
 	apiErr := errors.New("describe task definition failed")
 
 	okTaskDef := newTaskDefinition(okTaskDefArn, "api", 1,
-		newContainerDefinition("api", "example/api:1.0", scrapeLabels("8080", "/metrics", "http")))
+		newContainerDefinition("api", "example/api:1.0", scrapeDockerLabels("8080", "/metrics", "http")))
 	brokenTask1 := newAwsvpcTask(clusterArn, brokenTask1Arn, brokenTaskDefArn, "service:broken",
 		newAwsvpcContainer("app", brokenTask1Arn+"/app", "10.0.0.1"))
 	brokenTask2 := newAwsvpcTask(clusterArn, brokenTask2Arn, brokenTaskDefArn, "service:broken",
@@ -936,13 +868,13 @@ func TestDiscover_DescribeTaskDefinitionErrorIsLoggedAndSkipped(t *testing.T) {
 		newAwsvpcContainer("api", okTaskArn+"/api", "10.0.0.3"))
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
-	expectTasksInCluster(client, clusterArn, brokenTask1, brokenTask2, okTask)
+	setExpectationsListClusters(client, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, brokenTask1, brokenTask2, okTask)
 	// failures aren't cached: each task sharing the broken definition retries and logs
 	client.On("DescribeTaskDefinition", mock.Anything, &ecs.DescribeTaskDefinitionInput{
 		TaskDefinition: aws.String(brokenTaskDefArn),
 	}).Return(nil, apiErr).Times(2)
-	expectTaskDefinition(client, okTaskDef)
+	setExpectationsDescribeTaskDefinition(client, okTaskDef)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
@@ -969,8 +901,8 @@ func TestDiscover_DescribeTaskDefinitionWithoutDefinitionIsLoggedAndSkipped(t *t
 		newAwsvpcContainer("api", taskArn+"/api", "10.0.0.1"))
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
-	expectTasksInCluster(client, clusterArn, task)
+	setExpectationsListClusters(client, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, task)
 	client.On("DescribeTaskDefinition", mock.Anything, &ecs.DescribeTaskDefinitionInput{
 		TaskDefinition: aws.String(taskDefArn),
 	}).Return(&ecs.DescribeTaskDefinitionOutput{}, nil).Once()
@@ -1005,7 +937,7 @@ func TestDiscover_ListTasksError(t *testing.T) {
 	apiErr := errors.New("list tasks failed")
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
+	setExpectationsListClusters(client, clusterArn)
 	client.On("ListTasks", mock.Anything, &ecs.ListTasksInput{
 		Cluster: aws.String(clusterArn),
 	}).Return(nil, apiErr).Once()

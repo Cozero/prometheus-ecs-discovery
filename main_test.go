@@ -108,14 +108,14 @@ func TestExecute_WritesDiscoveredTargets(t *testing.T) {
 	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:3"
 
 	taskDef := newTaskDefinition(taskDefArn, "api", 3,
-		newContainerDefinition("api", "someOrg/api:1.0", scrapeLabels("8080", "/metrics", "http")))
+		newContainerDefinition("api", "someOrg/api:1.0", scrapeDockerLabels("8080", "/metrics", "http")))
 	task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "my-service:api",
 		newAwsvpcContainer("api", containerArn, "10.0.0.1"))
 
 	client := &mockEcsClient{}
-	expectClusters(client, clusterArn)
-	expectTasksInCluster(client, clusterArn, task)
-	expectTaskDefinition(client, taskDef)
+	setExpectationsListClusters(client, clusterArn)
+	setExpectationsListAndDescribeTasks(client, clusterArn, task)
+	setExpectationsDescribeTaskDefinition(client, taskDef)
 
 	outFile := filepath.Join(t.TempDir(), "ecs_file_sd.yml")
 	cfg := appConfig{outFile: outFile, times: 1, labelConfig: testLabelConfig}
@@ -144,7 +144,7 @@ func TestExecute_WritesDiscoveredTargets(t *testing.T) {
 
 func TestExecute_NoTargets_WritesEmptyList(t *testing.T) {
 	client := &mockEcsClient{}
-	expectClusters(client)
+	setExpectationsListClusters(client)
 
 	outFile := filepath.Join(t.TempDir(), "ecs_file_sd.yml")
 	cfg := appConfig{outFile: outFile, times: 1, labelConfig: testLabelConfig}

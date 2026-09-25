@@ -9,13 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var testLabelConfig = ExplorerContainerLabelConfig{
-	FilterLabel: "prometheus.io/scrape",
-	PortLabel:   "prometheus.io/port",
-	PathLabel:   "prometheus.io/path",
-	SchemeLabel: "prometheus.io/scheme",
-}
-
 // validLabels returns a fresh set of labels that match testLabelConfig,
 // with overrides applied on top. An override to nil removes the label.
 func validLabels(overrides map[string]*string) map[string]string {
