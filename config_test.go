@@ -29,12 +29,12 @@ func validLabels(overrides map[string]*string) map[string]string {
 }
 
 func TestContainerScrapeConfigFromDefinition(t *testing.T) {
-	validConfig := &ContainerLabelTaskConfig{Port: 8080, Path: "/metrics", Scheme: "http"}
+	validConfig := &ContainerScrapeConfig{Port: 8080, Path: "/metrics", Scheme: "http"}
 
 	tests := []struct {
 		name   string
 		labels map[string]string
-		want   *ContainerLabelTaskConfig
+		want   *ContainerScrapeConfig
 		// wantErr is a substring expected in the error; empty means no error
 		wantErr string
 	}{
@@ -44,13 +44,13 @@ func TestContainerScrapeConfigFromDefinition(t *testing.T) {
 		{name: "unrelated labels are ignored", labels: validLabels(map[string]*string{"OTHER": aws.String("x")}), 
 			want: validConfig},
 		{name: "lowest valid port", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("1")}),
-			want: &ContainerLabelTaskConfig{Port: 1, Path: "/metrics", Scheme: "http"}},
+			want: &ContainerScrapeConfig{Port: 1, Path: "/metrics", Scheme: "http"}},
 		{name: "highest valid port", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("65535")}),
-			want: &ContainerLabelTaskConfig{Port: 65535, Path: "/metrics", Scheme: "http"}},
+			want: &ContainerScrapeConfig{Port: 65535, Path: "/metrics", Scheme: "http"}},
 		{name: "http scheme", labels: validLabels(map[string]*string{testLabelConfig.SchemeLabel: aws.String("http")}),
-			want: &ContainerLabelTaskConfig{Port: 8080, Path: "/metrics", Scheme: "http"}},
+			want: &ContainerScrapeConfig{Port: 8080, Path: "/metrics", Scheme: "http"}},
 		{name: "https scheme", labels: validLabels(map[string]*string{testLabelConfig.SchemeLabel: aws.String("https")}),
-			want: &ContainerLabelTaskConfig{Port: 8080, Path: "/metrics", Scheme: "https"}},
+			want: &ContainerScrapeConfig{Port: 8080, Path: "/metrics", Scheme: "https"}},
 
 
 		// not a scrape target: no config, no error
@@ -135,5 +135,5 @@ func TestContainerScrapeConfigFromDefinition_CustomLabelNames(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, &ContainerLabelTaskConfig{Port: 9100, Path: "/prom", Scheme: "https"}, got)
+	assert.Equal(t, &ContainerScrapeConfig{Port: 9100, Path: "/prom", Scheme: "https"}, got)
 }

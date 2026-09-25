@@ -82,9 +82,9 @@ type mockContainerLabelConfig struct {
 
 func (m *mockContainerLabelConfig) ContainerScrapeConfigFromDefinition(
 	containerDef types.ContainerDefinition,
-) (*ContainerLabelTaskConfig, error) {
+) (*ContainerScrapeConfig, error) {
 	args := m.Called(containerDef)
-	out, _ := args.Get(0).(*ContainerLabelTaskConfig)
+	out, _ := args.Get(0).(*ContainerScrapeConfig)
 	return out, args.Error(1)
 }
 
@@ -329,7 +329,7 @@ func TestDiscover_WithClusterIds_AllTasksScrapable(t *testing.T) {
 	labelConfig := &mockContainerLabelConfig{}
 	// every task's container is checked
 	labelConfig.On("ContainerScrapeConfigFromDefinition", containerDef).
-		Return(&ContainerLabelTaskConfig{Port: 8080, Path: "/metrics", Scheme: "http"}, nil).Times(4)
+		Return(&ContainerScrapeConfig{Port: 8080, Path: "/metrics", Scheme: "http"}, nil).Times(4)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig, clusterIds: []string{"foo", "bar"}}
 
@@ -379,7 +379,7 @@ func TestDiscover_NoClusterIds_AllTasksScrapable(t *testing.T) {
 	labelConfig := &mockContainerLabelConfig{}
 	// every task's container is checked
 	labelConfig.On("ContainerScrapeConfigFromDefinition", containerDef).
-		Return(&ContainerLabelTaskConfig{Port: 8080, Path: "/metrics", Scheme: "http"}, nil).Times(4)
+		Return(&ContainerScrapeConfig{Port: 8080, Path: "/metrics", Scheme: "http"}, nil).Times(4)
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
 
@@ -612,7 +612,7 @@ func TestDiscover_DescribeTasksFailuresAreLogged(t *testing.T) {
 	labelConfig := &mockContainerLabelConfig{}
 	// only the described task's container is checked
 	labelConfig.On("ContainerScrapeConfigFromDefinition", containerDef).
-		Return(&ContainerLabelTaskConfig{Port: 8080, Path: "/metrics", Scheme: "http"}, nil).Once()
+		Return(&ContainerScrapeConfig{Port: 8080, Path: "/metrics", Scheme: "http"}, nil).Once()
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
 

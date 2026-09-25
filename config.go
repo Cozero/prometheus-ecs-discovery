@@ -9,7 +9,7 @@ import (
 
 // ContainerLabelConfig works out a container scrape config from its definition docker labels
 type ContainerLabelConfig interface {
-	ContainerScrapeConfigFromDefinition(containerDef ecstypes.ContainerDefinition) (*ContainerLabelTaskConfig, error)
+	ContainerScrapeConfigFromDefinition(containerDef ecstypes.ContainerDefinition) (*ContainerScrapeConfig, error)
 }
 
 // ExplorerContainerLabelConfig defines docker label names to scan to identify scrapable targets
@@ -21,13 +21,13 @@ type ExplorerContainerLabelConfig struct {
 }
 
 // ContainerScrapeConfig defines scrape config for that container
-type ContainerLabelTaskConfig struct {
+type ContainerScrapeConfig struct {
 	Port   int
 	Path   string
 	Scheme string
 }
 
-func (cf *ExplorerContainerLabelConfig) ContainerScrapeConfigFromDefinition(containerDef ecstypes.ContainerDefinition) (*ContainerLabelTaskConfig, error) {
+func (cf *ExplorerContainerLabelConfig) ContainerScrapeConfigFromDefinition(containerDef ecstypes.ContainerDefinition) (*ContainerScrapeConfig, error) {
 	filterlabelValue, ok := containerDef.DockerLabels[cf.FilterLabel]
 	if !ok {
 		return nil, nil
@@ -68,5 +68,5 @@ func (cf *ExplorerContainerLabelConfig) ContainerScrapeConfigFromDefinition(cont
 		return nil, fmt.Errorf("scheme label value for %s is an invalid value %q", cf.SchemeLabel, scheme)
 	}
 
-	return &ContainerLabelTaskConfig{port, path, scheme}, nil
+	return &ContainerScrapeConfig{port, path, scheme}, nil
 }
