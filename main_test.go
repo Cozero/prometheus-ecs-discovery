@@ -5,7 +5,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ func (m *mockExplorer) Discover(ctx context.Context) ([]*DiscoveredTaskTargets, 
 }
 
 func TestParseConfig_Defaults(t *testing.T) {
-	cfg, err := parseConfig(nil, ioutil.Discard)
+	cfg, err := parseConfig(nil, io.Discard)
 
 	require.NoError(t, err)
 	assert.Equal(t, appConfig{
@@ -56,7 +57,7 @@ func TestParseConfig_AllFlags(t *testing.T) {
 		"-config.port-label=my.port",
 		"-config.path-label=my.path",
 		"-config.scheme-label=my.scheme",
-	}, ioutil.Discard)
+	}, io.Discard)
 
 	require.NoError(t, err)
 	assert.Equal(t, appConfig{
@@ -75,14 +76,14 @@ func TestParseConfig_AllFlags(t *testing.T) {
 }
 
 func TestParseConfig_MultipleSpecificClusters(t *testing.T) {
-	cfg, err := parseConfig([]string{"-config.cluster=foo", "-config.cluster=bar"}, ioutil.Discard)
+	cfg, err := parseConfig([]string{"-config.cluster=foo", "-config.cluster=bar"}, io.Discard)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"foo", "bar"}, cfg.clusterIds)
 }
 
 func TestParseConfig_EmptyClusterValuesAreIgnored(t *testing.T) {
-	cfg, err := parseConfig([]string{"-config.cluster=", "-config.cluster= foo ", "-config.cluster=  "}, ioutil.Discard)
+	cfg, err := parseConfig([]string{"-config.cluster=", "-config.cluster= foo ", "-config.cluster=  "}, io.Discard)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"foo"}, cfg.clusterIds)
@@ -94,19 +95,19 @@ func TestParseConfig_TooManyClusters(t *testing.T) {
 		args = append(args, fmt.Sprintf("-config.cluster=cluster-%d", i))
 	}
 
-	_, err := parseConfig(args, ioutil.Discard)
+	_, err := parseConfig(args, io.Discard)
 
 	assert.EqualError(t, err, "at most 100 clusters can be configured, got 101")
 }
 
 func TestParseConfig_UnknownFlag(t *testing.T) {
-	_, err := parseConfig([]string{"-config.dynamic-port-detection"}, ioutil.Discard)
+	_, err := parseConfig([]string{"-config.dynamic-port-detection"}, io.Discard)
 
 	assert.Error(t, err)
 }
 
 func TestParseConfig_Help(t *testing.T) {
-	_, err := parseConfig([]string{"-h"}, ioutil.Discard)
+	_, err := parseConfig([]string{"-h"}, io.Discard)
 
 	assert.ErrorIs(t, err, flag.ErrHelp)
 }
@@ -149,9 +150,9 @@ func TestExecute_WritesDiscoveredTargets(t *testing.T) {
 	outFile := filepath.Join(t.TempDir(), "ecs_file_sd.yml")
 	cfg := appConfig{outFile: outFile, times: 1}
 
-	execute(context.Background(), cfg, explorer, nil)
+	execute(t.Context(), cfg, explorer, nil)
 
-	written, err := ioutil.ReadFile(outFile)
+	written, err := os.ReadFile(outFile)
 	require.NoError(t, err)
 	// the file format is what Prometheus consumes, so it's pinned down exactly
 	assert.Equal(t, `- targets:
@@ -191,9 +192,9 @@ func TestExecute_NoTargets_WritesEmptyList(t *testing.T) {
 	outFile := filepath.Join(t.TempDir(), "ecs_file_sd.yml")
 	cfg := appConfig{outFile: outFile, times: 1}
 
-	execute(context.Background(), cfg, explorer, nil)
+	execute(t.Context(), cfg, explorer, nil)
 
-	written, err := ioutil.ReadFile(outFile)
+	written, err := os.ReadFile(outFile)
 	require.NoError(t, err)
 	// `[]` rather than `null`, so Prometheus sees an empty target list
 	assert.Equal(t, "[]\n", string(written))
@@ -207,7 +208,7 @@ func TestExecute_DiscoveryErrorDoesNotWriteFile(t *testing.T) {
 	outFile := filepath.Join(t.TempDir(), "ecs_file_sd.yml")
 	cfg := appConfig{outFile: outFile, times: 1}
 
-	execute(context.Background(), cfg, explorer, nil)
+	execute(t.Context(), cfg, explorer, nil)
 
 	// a failed run must not overwrite the last good targets with nothing
 	assert.NoFileExists(t, outFile)
@@ -225,7 +226,7 @@ func TestExecute_RunsScrapeTimes(t *testing.T) {
 	ticks <- time.Time{}
 	ticks <- time.Time{}
 
-	execute(context.Background(), cfg, explorer, ticks)
+	execute(t.Context(), cfg, explorer, ticks)
 
 	explorer.AssertExpectations(t)
 	assert.Empty(t, ticks, "every tick was consumed")
@@ -237,7 +238,7 @@ func TestExecute_WhenScrapeTimesIsZero_RunsUntilCancelled(t *testing.T) {
 
 	cfg := appConfig{outFile: filepath.Join(t.TempDir(), "ecs_file_sd.yml"), times: 0}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	ticks := make(chan time.Time)
 	go func() {
 		// unbuffered: each send completes only once execute is waiting for the next tick

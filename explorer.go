@@ -256,7 +256,7 @@ func (e *EcsTaskExplorer) getTasksInClusters(ctx context.Context, clusterArns []
 
 	// start goroutines to work through all cluster ARNs
 	// TODO the number of goroutines should be configurable
-	for w := 1; w <= 4; w++ {
+	for range 4 {
 		go func() {
 			for clusterArn := range jobs {
 				tasksInCluster, err := e.getTasksRunningInCluster(ctx, clusterArn)

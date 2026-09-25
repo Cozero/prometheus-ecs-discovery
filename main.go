@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"strings"
@@ -17,7 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
-	"github.com/go-yaml/yaml"
+	"go.yaml.in/yaml/v2"
 )
 
 // DescribeClusters accepts at most 100 clusters per call
@@ -81,8 +80,7 @@ func parseConfig(args []string, output io.Writer) (appConfig, error) {
 // errors and displays them to standard error.
 func logError(err error) {
 	if err != nil {
-		var oe *smithy.OperationError
-		if errors.As(err, &oe) {
+		if oe, ok := errors.AsType[*smithy.OperationError](err); ok {
 			log.Printf("failed to call service: %s, operation: %s, error: %v", oe.Service(), oe.Operation(), oe.Unwrap())
 		} else {
 			log.Println(err.Error())
@@ -97,7 +95,7 @@ func writeTargets(path string, targets []*DiscoveredTaskTargets) error {
 		return err
 	}
 	log.Printf("Writing %d discovered exporters to %s", len(targets), path)
-	return ioutil.WriteFile(path, m, 0644)
+	return os.WriteFile(path, m, 0644)
 }
 
 // execute runs discovery once straight away, then on every tick, until cfg.times runs are done

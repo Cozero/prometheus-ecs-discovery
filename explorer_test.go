@@ -263,7 +263,7 @@ func TestDiscover_NoClusterIds_NoClustersFound(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	// non-nil so the written file is `[]` rather than `null`
@@ -289,7 +289,7 @@ func TestDiscover_NoClusterIds_ClustersWithoutTasks(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	assert.NotNil(t, got)
@@ -333,7 +333,7 @@ func TestDiscover_WithClusterIds_AllTasksScrapable(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig, clusterIds: []string{"foo", "bar"}}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	// clusters are processed concurrently, so order isn't guaranteed
@@ -383,7 +383,7 @@ func TestDiscover_NoClusterIds_AllTasksScrapable(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	// clusters are processed concurrently, so order isn't guaranteed
@@ -424,7 +424,7 @@ func TestDiscover_WithClusterId_NoScrapableTasks(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig, clusterIds: []string{"foo"}}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	assert.NotNil(t, got)
@@ -446,7 +446,7 @@ func TestDiscover_WithClusterIds_DescribeClustersError(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig, clusterIds: []string{"foo", "bar"}}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	assert.ErrorIs(t, err, apiErr)
 	assert.Nil(t, got)
@@ -478,7 +478,7 @@ func TestDiscover_WithClusterIds_DescribeClustersFailures(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig, clusterIds: []string{"foo", "does_not_exist"}}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	assert.EqualError(t, err, fmt.Sprintf("failed to describe 1 cluster(s):\n- %s: %s", missingArn, missingReason))
 	assert.Nil(t, got)
@@ -519,7 +519,7 @@ func TestDiscover_ListTasksErrorOnLaterPage(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	assert.ErrorIs(t, err, apiErr)
 	assert.Nil(t, got, "no partial results should be returned alongside an error")
@@ -567,7 +567,7 @@ func TestDiscover_DescribeTasksErrorOnLaterPage(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	assert.ErrorIs(t, err, apiErr)
 	assert.Nil(t, got, "no partial results should be returned alongside an error")
@@ -616,7 +616,7 @@ func TestDiscover_DescribeTasksFailuresAreLogged(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: labelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{task1Arn + " api 10.0.0.1:8080 /metrics http"}, targetSummaries(got), "described tasks are still returned")
@@ -644,7 +644,7 @@ func TestDiscover_SingleScrapableContainer(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	// the only test checking every label, so the mapping is fully pinned down here
@@ -687,7 +687,7 @@ func TestDiscover_UnlabelledSidecarIsSkipped(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{taskArn + " api 10.0.0.1:8080 /metrics http"}, targetSummaries(got))
@@ -714,7 +714,7 @@ func TestDiscover_MultipleScrapableContainersInTask(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	// one entry per container, each with its own port, path and scheme
@@ -745,7 +745,7 @@ func TestDiscover_TasksSharingDefinition(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{
@@ -781,7 +781,7 @@ func TestDiscover_MultipleClusters(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	// clusters are processed concurrently, so order isn't guaranteed
@@ -809,7 +809,7 @@ func TestDiscover_NoScrapableContainers(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	assert.NotNil(t, got)
@@ -839,7 +839,7 @@ func TestDiscover_InvalidLabelsAreLoggedAndSkipped(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	// the misconfigured container doesn't stop the valid one in the same task
@@ -871,7 +871,7 @@ func TestDiscover_ContainerMissingFromTaskIsLoggedAndSkipped(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{taskArn + " worker 10.0.0.1:9100 /prom https"}, targetSummaries(got))
@@ -900,7 +900,7 @@ func TestDiscover_ContainerWithoutIPIsLoggedAndSkipped(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	assert.Empty(t, got)
@@ -929,7 +929,7 @@ func TestDiscover_UsesFirstNonEmptyIP(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{taskArn + " api 10.0.0.2:8080 /metrics http"}, targetSummaries(got))
@@ -968,7 +968,7 @@ func TestDiscover_DescribeTaskDefinitionErrorIsLoggedAndSkipped(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	// one broken definition doesn't hide the other targets
@@ -999,7 +999,7 @@ func TestDiscover_DescribeTaskDefinitionWithoutDefinitionIsLoggedAndSkipped(t *t
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	require.NoError(t, err)
 	assert.Empty(t, got)
@@ -1015,7 +1015,7 @@ func TestDiscover_ListClustersError(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	assert.ErrorIs(t, err, apiErr)
 	assert.Nil(t, got)
@@ -1034,7 +1034,7 @@ func TestDiscover_ListTasksError(t *testing.T) {
 
 	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: &testLabelConfig}
 
-	got, err := explorer.Discover(context.Background())
+	got, err := explorer.Discover(t.Context())
 
 	assert.ErrorIs(t, err, apiErr)
 	assert.Nil(t, got)
