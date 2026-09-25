@@ -10,10 +10,10 @@ import (
 )
 
 var testLabelConfig = ExplorerContainerLabelConfig{
-	FilterLabel: "PROMETHEUS_SCRAPE",
-	PortLabel:   "PROMETHEUS_EXPORTER_PORT",
-	PathLabel:   "PROMETHEUS_EXPORTER_PATH",
-	SchemeLabel: "PROMETHEUS_EXPORTER_SCHEME",
+	FilterLabel: "prometheus.io/scrape",
+	PortLabel:   "prometheus.io/port",
+	PathLabel:   "prometheus.io/path",
+	SchemeLabel: "prometheus.io/scheme",
 }
 
 // validLabels returns a fresh set of labels that match testLabelConfig,
@@ -46,40 +46,63 @@ func TestContainerScrapeConfigFromDefinition(t *testing.T) {
 		wantErr string
 	}{
 		// match
-		{name: "all labels valid", labels: validLabels(nil), want: validConfig},
-		{name: "unrelated labels are ignored", labels: validLabels(map[string]*string{"OTHER": aws.String("x")}), want: validConfig},
+		{name: "all labels for valid scrape config", labels: validLabels(nil), 
+			want: validConfig},
+		{name: "unrelated labels are ignored", labels: validLabels(map[string]*string{"OTHER": aws.String("x")}), 
+			want: validConfig},
 		{name: "lowest valid port", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("1")}),
 			want: &ContainerLabelTaskConfig{Port: 1, Path: "/metrics", Scheme: "http"}},
 		{name: "highest valid port", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("65535")}),
 			want: &ContainerLabelTaskConfig{Port: 65535, Path: "/metrics", Scheme: "http"}},
+		{name: "http scheme", labels: validLabels(map[string]*string{testLabelConfig.SchemeLabel: aws.String("http")}),
+			want: &ContainerLabelTaskConfig{Port: 8080, Path: "/metrics", Scheme: "http"}},
 		{name: "https scheme", labels: validLabels(map[string]*string{testLabelConfig.SchemeLabel: aws.String("https")}),
 			want: &ContainerLabelTaskConfig{Port: 8080, Path: "/metrics", Scheme: "https"}},
 
+
 		// not a scrape target: no config, no error
-		{name: "no labels at all", labels: nil},
-		{name: "filter label missing", labels: validLabels(map[string]*string{testLabelConfig.FilterLabel: nil})},
-		{name: "filter label false", labels: validLabels(map[string]*string{testLabelConfig.FilterLabel: aws.String("false")})},
-		{name: "filter label empty", labels: validLabels(map[string]*string{testLabelConfig.FilterLabel: aws.String("")})},
-		{name: "filter label is case sensitive", labels: validLabels(map[string]*string{testLabelConfig.FilterLabel: aws.String("True")})},
-		{name: "port label missing", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: nil})},
-		{name: "path label missing", labels: validLabels(map[string]*string{testLabelConfig.PathLabel: nil})},
-		{name: "scheme label missing", labels: validLabels(map[string]*string{testLabelConfig.SchemeLabel: nil})},
+		{name: "no labels", labels: nil, 
+			want: nil},
+		{name: "filter label missing", labels: validLabels(map[string]*string{testLabelConfig.FilterLabel: nil}), 
+			want: nil},
+		{name: "filter label false", labels: validLabels(map[string]*string{testLabelConfig.FilterLabel: aws.String("false")}),
+			want: nil},
+		{name: "filter label empty", labels: validLabels(map[string]*string{testLabelConfig.FilterLabel: aws.String("")}),
+			want: nil},
+		{name: "filter label is case sensitive", labels: validLabels(map[string]*string{testLabelConfig.FilterLabel: aws.String("True")}),
+			want: nil},
+		{name: "port label missing", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: nil}),
+			want: nil},
+		{name: "path label missing", labels: validLabels(map[string]*string{testLabelConfig.PathLabel: nil}),
+			want: nil},
+		{name: "scheme label missing", labels: validLabels(map[string]*string{testLabelConfig.SchemeLabel: nil}),
+			want: nil},
 
 		// misconfigured path: no config, error mentioning the label
-		{name: "path label empty", labels: validLabels(map[string]*string{testLabelConfig.PathLabel: aws.String("")}), wantErr: testLabelConfig.PathLabel},
+		{name: "path label empty", labels: validLabels(map[string]*string{testLabelConfig.PathLabel: aws.String("")}), 
+			want: nil, wantErr: testLabelConfig.PathLabel},
 
 		// unsupported scheme: no config, error mentioning the offending value
-		{name: "scheme label empty", labels: validLabels(map[string]*string{testLabelConfig.SchemeLabel: aws.String("")}), wantErr: `""`},
-		{name: "scheme not http(s)", labels: validLabels(map[string]*string{testLabelConfig.SchemeLabel: aws.String("ftp")}), wantErr: `"ftp"`},
-		{name: "scheme is case sensitive", labels: validLabels(map[string]*string{testLabelConfig.SchemeLabel: aws.String("HTTP")}), wantErr: `"HTTP"`},
+		{name: "scheme label empty", labels: validLabels(map[string]*string{testLabelConfig.SchemeLabel: aws.String("")}), 
+			want: nil, wantErr: `""`},
+		{name: "scheme not http(s)", labels: validLabels(map[string]*string{testLabelConfig.SchemeLabel: aws.String("ftp")}), 
+			want: nil, wantErr: `"ftp"`},
+		{name: "scheme is case sensitive", labels: validLabels(map[string]*string{testLabelConfig.SchemeLabel: aws.String("HTTP")}), 
+			want: nil, wantErr: `"HTTP"`},
 
 		// invalid port: no config, error mentioning the offending value
-		{name: "port label empty", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("")}), wantErr: `""`},
-		{name: "port not a number", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("abc")}), wantErr: `"abc"`},
-		{name: "port with whitespace", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String(" 8080")}), wantErr: `" 8080"`},
-		{name: "port zero", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("0")}), wantErr: `"0"`},
-		{name: "port negative", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("-1")}), wantErr: `"-1"`},
-		{name: "port above range", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("65536")}), wantErr: `"65536"`},
+		{name: "port label empty", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("")}), 
+			want: nil, wantErr: `""`},
+		{name: "port not a number", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("abc")}), 
+			want: nil, wantErr: `"abc"`},
+		{name: "port with whitespace", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String(" 8080")}), 
+			want: nil, wantErr: `" 8080"`},
+		{name: "port zero", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("0")}), 
+			want: nil, wantErr: `"0"`},
+		{name: "port negative", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("-1")}), 
+			want: nil, wantErr: `"-1"`},
+		{name: "port above range", labels: validLabels(map[string]*string{testLabelConfig.PortLabel: aws.String("65536")}), 
+			want: nil, wantErr: `"65536"`},
 	}
 
 	for _, tt := range tests {
