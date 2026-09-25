@@ -147,7 +147,6 @@ func main() {
 	}
 
 	if cfg.roleArn != "" {
-		// Assume role
 		stsSvc := sts.NewFromConfig(awsCfg)
 		awsCfg.Credentials = stscreds.NewAssumeRoleProvider(stsSvc, cfg.roleArn)
 	}

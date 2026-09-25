@@ -37,7 +37,7 @@ func TestParseConfig_Defaults(t *testing.T) {
 
 func TestParseConfig_AllFlags(t *testing.T) {
 	cfg, err := parseConfig([]string{
-		"-config.cluster=foo",
+		"-config.cluster=foo-cluster",
 		"-config.write-to=/some/dir/out.yml",
 		"-config.scrape-interval=30s",
 		"-config.scrape-times=5",
@@ -50,7 +50,7 @@ func TestParseConfig_AllFlags(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, appConfig{
-		clusterIds: []string{"foo"},
+		clusterIds: []string{"foo-cluster"},
 		outFile:    "/some/dir/out.yml",
 		interval:   30 * time.Second,
 		times:      5,
@@ -64,7 +64,7 @@ func TestParseConfig_AllFlags(t *testing.T) {
 	}, cfg)
 }
 
-func TestParseConfig_RepeatedCluster(t *testing.T) {
+func TestParseConfig_MultipleSpecificClusters(t *testing.T) {
 	cfg, err := parseConfig([]string{"-config.cluster=foo", "-config.cluster=bar"}, ioutil.Discard)
 
 	require.NoError(t, err)
@@ -90,7 +90,6 @@ func TestParseConfig_TooManyClusters(t *testing.T) {
 }
 
 func TestParseConfig_UnknownFlag(t *testing.T) {
-	// e.g. a flag the old version supported
 	_, err := parseConfig([]string{"-config.dynamic-port-detection"}, ioutil.Discard)
 
 	assert.Error(t, err)
@@ -109,8 +108,8 @@ func TestExecute_WritesDiscoveredTargets(t *testing.T) {
 	taskDefArn := "arn:aws:ecs:eu-central-1:123456789012:task-definition/api:3"
 
 	taskDef := newTaskDefinition(taskDefArn, "api", 3,
-		newContainerDefinition("api", "example/api:1.0", scrapeLabels("8080", "/metrics", "http")))
-	task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "service:api",
+		newContainerDefinition("api", "someOrg/api:1.0", scrapeLabels("8080", "/metrics", "http")))
+	task := newAwsvpcTask(clusterArn, taskArn, taskDefArn, "my-service:api",
 		newAwsvpcContainer("api", containerArn, "10.0.0.1"))
 
 	client := &mockEcsClient{}
@@ -132,18 +131,18 @@ func TestExecute_WritesDiscoveredTargets(t *testing.T) {
     task_arn: arn:aws:ecs:eu-central-1:123456789012:task/foo/1
     task_name: api
     task_revision: "3"
-    task_group: service:api
+    task_group: my-service:api
     cluster_arn: arn:aws:ecs:eu-central-1:123456789012:cluster/foo
     container_name: api
     container_arn: arn:aws:ecs:eu-central-1:123456789012:container/foo/1/api
-    docker_image: example/api:1.0
+    docker_image: someOrg/api:1.0
     __metrics_path__: /metrics
     __scheme__: http
 `, string(written))
 	client.AssertExpectations(t)
 }
 
-func TestExecute_NoTargetsWritesEmptyList(t *testing.T) {
+func TestExecute_NoTargets_WritesEmptyList(t *testing.T) {
 	client := &mockEcsClient{}
 	expectClusters(client)
 
@@ -190,7 +189,7 @@ func TestExecute_RunsScrapeTimes(t *testing.T) {
 	assert.Empty(t, ticks, "every tick was consumed")
 }
 
-func TestExecute_RunsUntilCancelledWhenScrapeTimesIsZero(t *testing.T) {
+func TestExecute_WhenScrapeTimesIsZero_RunsUntilCancelled(t *testing.T) {
 	client := &mockEcsClient{}
 	client.On("ListClusters", mock.Anything, &ecs.ListClustersInput{}).Return(&ecs.ListClustersOutput{}, nil).Times(3)
 
