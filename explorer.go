@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -99,11 +101,11 @@ func (e *EcsTaskExplorer) Discover(ctx context.Context) ([]*DiscoveredTaskTarget
 			}
 
 			allDiscoveredTaskTargets = append(allDiscoveredTaskTargets, &DiscoveredTaskTargets{
-				Targets: []string{fmt.Sprintf("%s:%d", ip, scrapeConfig.Port)},
+				Targets: []string{net.JoinHostPort(ip, strconv.Itoa(scrapeConfig.Port))},
 				Labels: labels{
 					TaskArn:       aws.ToString(td.task.TaskArn),
 					TaskName:      aws.ToString(td.definition.Family),
-					TaskRevision:  fmt.Sprintf("%d", td.definition.Revision),
+					TaskRevision:  strconv.Itoa(int(td.definition.Revision)),
 					TaskGroup:     aws.ToString(td.task.Group),
 					ClusterArn:    aws.ToString(td.task.ClusterArn),
 					ContainerName: containerName,
