@@ -116,11 +116,12 @@ func TestExecute_WritesDiscoveredTargets(t *testing.T) {
 	setExpectationsListClusters(client, clusterArn)
 	setExpectationsListAndDescribeTasks(client, clusterArn, task)
 	setExpectationsDescribeTaskDefinition(client, taskDef)
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
 	outFile := filepath.Join(t.TempDir(), "ecs_file_sd.yml")
-	cfg := appConfig{outFile: outFile, times: 1, labelConfig: testLabelConfig}
+	cfg := appConfig{outFile: outFile, times: 1}
 
-	execute(context.Background(), cfg, client, nil)
+	execute(context.Background(), cfg, explorer, nil)
 
 	written, err := ioutil.ReadFile(outFile)
 	require.NoError(t, err)
@@ -145,11 +146,12 @@ func TestExecute_WritesDiscoveredTargets(t *testing.T) {
 func TestExecute_NoTargets_WritesEmptyList(t *testing.T) {
 	client := &mockEcsClient{}
 	setExpectationsListClusters(client)
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
 	outFile := filepath.Join(t.TempDir(), "ecs_file_sd.yml")
-	cfg := appConfig{outFile: outFile, times: 1, labelConfig: testLabelConfig}
+	cfg := appConfig{outFile: outFile, times: 1}
 
-	execute(context.Background(), cfg, client, nil)
+	execute(context.Background(), cfg, explorer, nil)
 
 	written, err := ioutil.ReadFile(outFile)
 	require.NoError(t, err)
@@ -161,11 +163,12 @@ func TestExecute_NoTargets_WritesEmptyList(t *testing.T) {
 func TestExecute_DiscoveryErrorDoesNotWriteFile(t *testing.T) {
 	client := &mockEcsClient{}
 	client.On("ListClusters", mock.Anything, &ecs.ListClustersInput{}).Return(nil, errors.New("list clusters failed")).Once()
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
 	outFile := filepath.Join(t.TempDir(), "ecs_file_sd.yml")
-	cfg := appConfig{outFile: outFile, times: 1, labelConfig: testLabelConfig}
+	cfg := appConfig{outFile: outFile, times: 1}
 
-	execute(context.Background(), cfg, client, nil)
+	execute(context.Background(), cfg, explorer, nil)
 
 	// a failed run must not overwrite the last good targets with nothing
 	assert.NoFileExists(t, outFile)
@@ -175,15 +178,16 @@ func TestExecute_DiscoveryErrorDoesNotWriteFile(t *testing.T) {
 func TestExecute_RunsScrapeTimes(t *testing.T) {
 	client := &mockEcsClient{}
 	client.On("ListClusters", mock.Anything, &ecs.ListClustersInput{}).Return(&ecs.ListClustersOutput{}, nil).Times(3)
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
-	cfg := appConfig{outFile: filepath.Join(t.TempDir(), "ecs_file_sd.yml"), times: 3, labelConfig: testLabelConfig}
+	cfg := appConfig{outFile: filepath.Join(t.TempDir(), "ecs_file_sd.yml"), times: 3}
 
 	// first run is immediate, the other two wait for a tick each
 	ticks := make(chan time.Time, 2)
 	ticks <- time.Time{}
 	ticks <- time.Time{}
 
-	execute(context.Background(), cfg, client, ticks)
+	execute(context.Background(), cfg, explorer, ticks)
 
 	client.AssertExpectations(t)
 	assert.Empty(t, ticks, "every tick was consumed")
@@ -192,8 +196,9 @@ func TestExecute_RunsScrapeTimes(t *testing.T) {
 func TestExecute_WhenScrapeTimesIsZero_RunsUntilCancelled(t *testing.T) {
 	client := &mockEcsClient{}
 	client.On("ListClusters", mock.Anything, &ecs.ListClustersInput{}).Return(&ecs.ListClustersOutput{}, nil).Times(3)
+	explorer := &EcsTaskExplorer{ecs: client, containerLabelConfig: testLabelConfig}
 
-	cfg := appConfig{outFile: filepath.Join(t.TempDir(), "ecs_file_sd.yml"), times: 0, labelConfig: testLabelConfig}
+	cfg := appConfig{outFile: filepath.Join(t.TempDir(), "ecs_file_sd.yml"), times: 0}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ticks := make(chan time.Time)
@@ -204,7 +209,7 @@ func TestExecute_WhenScrapeTimesIsZero_RunsUntilCancelled(t *testing.T) {
 		cancel()
 	}()
 
-	execute(ctx, cfg, client, ticks)
+	execute(ctx, cfg, explorer, ticks)
 
 	client.AssertExpectations(t)
 }

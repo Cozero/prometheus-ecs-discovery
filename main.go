@@ -102,13 +102,7 @@ func writeTargets(path string, targets []*DiscoveredTaskTargets) error {
 
 // execute runs discovery once straight away, then on every tick, until cfg.times runs are done
 // (0 = forever) or ctx is cancelled. A failed run is logged and doesn't stop the loop.
-func execute(ctx context.Context, cfg appConfig, client EcsAPIClient, ticks <-chan time.Time) {
-	explorer := &EcsTaskExplorer{
-		ecs:                  client,
-		containerLabelConfig: cfg.labelConfig,
-		clusterIds:           cfg.clusterIds,
-	}
-
+func execute(ctx context.Context, cfg appConfig, explorer *EcsTaskExplorer, ticks <-chan time.Time) {
 	work := func() {
 		targets, err := explorer.Discover(ctx)
 		if err != nil {
@@ -151,8 +145,14 @@ func main() {
 		awsCfg.Credentials = stscreds.NewAssumeRoleProvider(stsSvc, cfg.roleArn)
 	}
 
+	explorer := &EcsTaskExplorer{
+		ecs:                  ecs.NewFromConfig(awsCfg),
+		containerLabelConfig: cfg.labelConfig,
+		clusterIds:           cfg.clusterIds,
+	}
+
 	ticker := time.NewTicker(cfg.interval)
 	defer ticker.Stop()
 
-	execute(context.Background(), cfg, ecs.NewFromConfig(awsCfg), ticker.C)
+	execute(context.Background(), cfg, explorer, ticker.C)
 }
